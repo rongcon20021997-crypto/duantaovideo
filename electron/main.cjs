@@ -20,7 +20,7 @@ await write("settings.json",s);return settings();}
 function cliPath(){const p=path.join(app.getAppPath(),"node_modules","@swissmarley","gflow-cli","dist","src","index.js");if(!fs.existsSync(p))throw Error("Thiếu @swissmarley/gflow-cli. Hãy chạy npm install.");return p;}
 function idle(){if(active)throw Error("Đang có hàng đợi chạy. Vui lòng dừng hoặc đợi xong trước khi điều khiển Google Flow.");}
 function cmd(args,timeout=1800000){return new Promise((resolve,reject)=>{if(active?.cancelled)return reject(Error("Đã dừng hàng đợi."));
-const child=spawn(process.execPath,[cliPath(),...args],{windowsHide:true,env:{...process.env,ELECTRON_RUN_AS_NODE:"1"},stdio:["ignore","pipe","pipe"]});
+const child=spawn(process.execPath,[cliPath(),...args],{cwd:root(),windowsHide:true,env:{...process.env,ELECTRON_RUN_AS_NODE:"1"},stdio:["ignore","pipe","pipe"]});
 if(active)active.child=child;let out="",err="";const trim=s=>s.slice(-18000);
 child.stdout.on("data",d=>{const t=String(d);out=trim(out+t);for(const line of t.split(/\r?\n/).filter(Boolean).slice(-3))log(line);});
 child.stderr.on("data",d=>{const t=String(d);err=trim(err+t);for(const line of t.split(/\r?\n/).filter(Boolean).slice(-3))log(line);});
@@ -36,7 +36,7 @@ async function sdkProjects(){const c=sdk(true);try{return await c.listProjects()
 async function sdkVideo(ws,scene,i,dir){const c=sdk(true);try{const p=path.join(dir,w.safeJobId("sdk-"+i+"-"+scene.id)+".mp4");const r=await c.runScene({mediaType:"video",model:ws.videoModel==="Omni Flash"?"Veo 3.1 - Fast":ws.videoModel,duration:String(scene.duration)+"s",aspect:ws.ratio,prompt:scene.prompt,generate:true,wait:true,timeout:1200,output:p});if(r.status!=="completed")throw Error("SDK chưa xác nhận video hoàn tất.");return r.download?.path||p;}finally{await c.disconnect().catch(()=>{});}}
 async function run(input){idle();const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");
 const state={cancelled:false,child:null};active=state;const dir=path.resolve(ws.outputDir);await fsp.mkdir(dir,{recursive:true});emit({kind:"run",running:true});
-try{for(let i=0;i<ws.scenes.length;i++){const scene=ws.scenes[i];if(state.cancelled)break;if(scene.status==="completed"&&scene.video&&fs.existsSync(scene.video)){log("Bỏ qua cảnh đã hoàn thành: "+scene.title);continue;}
+try{if(ws.engine==="gflow" && ws.character.name){log("Kiểm tra nhân vật đã được lưu trong Flow...");const names=await cmd(["character","list",...flags(ws)],120000);if(!names.toLowerCase().includes(ws.character.name.toLowerCase()))throw Error("Không tìm thấy nhân vật "+ws.character.name+" trên Google Flow. Vào tab Nhân vật tạo hoặc chọn tên nhân vật đang tồn tại trước khi chạy.");}for(let i=0;i<ws.scenes.length;i++){const scene=ws.scenes[i];if(state.cancelled)break;if(scene.status==="completed"&&scene.video&&fs.existsSync(scene.video)){log("Bỏ qua cảnh đã hoàn thành: "+scene.title);continue;}
 scene.status="generating";scene.error=undefined;emit({kind:"scene",sceneId:scene.id,status:"generating"});log("Cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
 try{if(ws.engine==="sdk"){scene.video=await sdkVideo(ws,scene,i+1,dir);}
 else{
