@@ -2,6 +2,7 @@
 const {app,BrowserWindow,ipcMain,dialog,shell,safeStorage}=require("electron");
 const fs=require("node:fs"),fsp=fs.promises,path=require("node:path"),{spawn}=require("node:child_process");
 const w=require("./lib/workflow.cjs");
+const chrome=require("./lib/chrome.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -19,14 +20,16 @@ if(data?.apiKey){if(!safeStorage.isEncryptionAvailable())throw Error("Không th�
 await write("settings.json",s);return settings();}
 function cliPath(){const p=path.join(app.getAppPath(),"node_modules","@swissmarley","gflow-cli","dist","src","index.js");if(!fs.existsSync(p))throw Error("Thiếu @swissmarley/gflow-cli. Hãy chạy npm install.");return p;}
 function idle(){if(active)throw Error("Đang có hàng đợi chạy. Vui lòng dừng hoặc đợi xong trước khi điều khiển Google Flow.");}
-function cmd(args,timeout=1800000){return new Promise((resolve,reject)=>{if(active?.cancelled)return reject(Error("Đã dừng hàng đợi."));
-const child=spawn(process.execPath,[cliPath(),...args],{cwd:root(),windowsHide:true,env:{...process.env,ELECTRON_RUN_AS_NODE:"1"},stdio:["ignore","pipe","pipe"]});
+function cmd(args,timeout=1800000,requestedChromePath){
+const executable=chrome.resolveChromeExecutable({chromePath:requestedChromePath||workspace().chromePath});
+return new Promise((resolve,reject)=>{if(active?.cancelled)return reject(Error("Đã dừng hàng đợi."));
+const child=spawn(process.execPath,[cliPath(),...args],{cwd:root(),windowsHide:true,env:{...process.env,ELECTRON_RUN_AS_NODE:"1",...(executable?{GFLOW_CHROME_PATH:executable}:{})},stdio:["ignore","pipe","pipe"]});
 if(active)active.child=child;let out="",err="";const trim=s=>s.slice(-18000);
 child.stdout.on("data",d=>{const t=String(d);out=trim(out+t);for(const line of t.split(/\r?\n/).filter(Boolean).slice(-3))log(line);});
 child.stderr.on("data",d=>{const t=String(d);err=trim(err+t);for(const line of t.split(/\r?\n/).filter(Boolean).slice(-3))log(line);});
 const timer=setTimeout(()=>child.kill(),timeout);let settled=false;
 child.on("error",e=>{if(!settled){settled=true;clearTimeout(timer);reject(e);}});
-child.on("close",code=>{clearTimeout(timer);if(active?.child===child)active.child=null;if(settled)return;settled=true;if(active?.cancelled)return reject(Error("Đã dừng theo yêu cầu."));if(code!==0)return reject(Error((err||out||"CLI không chạy thành công").slice(-2200)));resolve(out);});
+child.on("close",code=>{clearTimeout(timer);if(active?.child===child)active.child=null;if(settled)return;settled=true;if(active?.cancelled)return reject(Error("Đã dừng theo yêu cầu."));if(code!==0){let detail=(err||out||"CLI không chạy thành công").slice(-2200);if(detail.includes("Could not start Google Chrome with a debugging port"))detail+="\nTrên Windows: đóng hẳn Chrome do GFlow mở để đăng nhập (KHÔNG phải Chrome cá nhân), kiểm tra đường dẫn chrome.exe trong Cài đặt rồi thử GFlow Doctor. Không xóa profile/cookie.";return reject(Error(detail));}resolve(out);});
 });}
 function flags(ws){return [...(ws.profile?["--profile",ws.profile]:[]),...(ws.project?["--project",ws.project]:[])];}
 function artifact(dir,id,extensions){const x=w.latestArtifact(dir,id,extensions);if(!x)throw Error("Lệnh hoàn tất nhưng chưa tìm được file "+id+" trong "+dir);return path.join(dir,x);}
@@ -62,9 +65,10 @@ ipcMain.handle("workspace:get",()=>workspace());
 ipcMain.handle("workspace:save",(_,x)=>{idle();return save(x);});
 ipcMain.handle("settings:get",()=>settings());ipcMain.handle("settings:save",(_,x)=>saveSettings(x));
 ipcMain.handle("story:generate",(_,x)=>story(x));
-ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000);});
-ipcMain.handle("flow:doctor",(_,x)=>{idle();return cmd(["doctor","--profile",x?.profile||"default"],120000);});
-ipcMain.handle("flow:character:create",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);return cmd(args,1200000);});
+ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000,x?.chromePath);});
+ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
+ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
+ipcMain.handle("flow:character:create",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);return cmd(args,1200000,ws.chromePath);});
 ipcMain.handle("flow:character:list",(_,x)=>{idle();return cmd(["character","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
 ipcMain.handle("flow:media:list",(_,x)=>{idle();return cmd(["media","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
 ipcMain.handle("flow:extend",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const ref=String(x?.sceneId||x?.mediaId||"").trim(),prompt=String(x?.prompt||"").trim();if(!ref||!prompt)throw Error("Nhập Scene/Media ID và prompt nối tiếp.");return cmd(["extend",...(x?.sceneId?["--scene",ref]:["--media-id",ref]),"--prompt",prompt,"--out",ws.outputDir,...flags(ws)],1200000);});
@@ -78,6 +82,7 @@ ipcMain.handle("flow:batch",(_,x)=>{idle();const file=String(x?.file||"");if(!pa
 ipcMain.handle("flow:run",(_,x)=>run(x));ipcMain.handle("flow:stop",()=>{if(!active)return false;active.cancelled=true;active.child?.kill();log("Đã yêu cầu dừng.");return true;});
 ipcMain.handle("flow:sdkDoctor",()=>sdkDoctor());ipcMain.handle("flow:sdkProjects",()=>{idle();return sdkProjects();});
 ipcMain.handle("flow:sdkCreateProject",async(_,x)=>{idle();const c=sdk(true);try{return await c.createProject({title:String(x?.title||"Dự án video").slice(0,120)});}finally{await c.disconnect().catch(()=>{});}});
+ipcMain.handle("dialog:pickChrome",async()=>{const r=await dialog.showOpenDialog(win,{title:"Chọn Chrome executable",properties:["openFile"],filters:[{name:"Google Chrome",extensions:["exe"]}]});return r.canceled?null:r.filePaths[0];});
 ipcMain.handle("dialog:pickImages",async()=>{const r=await dialog.showOpenDialog(win,{properties:["openFile","multiSelections"],filters:[{name:"Image",extensions:["png","jpg","jpeg","webp"]}]});return r.canceled?[]:r.filePaths;});
 ipcMain.handle("dialog:pickYaml",async()=>{const r=await dialog.showOpenDialog(win,{properties:["openFile"],filters:[{name:"YAML pipeline",extensions:["yaml","yml"]}]});return r.canceled?null:r.filePaths[0];});
 ipcMain.handle("workspace:chooseOutput",async()=>{const r=await dialog.showOpenDialog(win,{properties:["openDirectory"]});return r.canceled?null:r.filePaths[0];});

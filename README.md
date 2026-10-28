@@ -51,3 +51,12 @@ Máy cần Google Chrome và quyền sử dụng Google Flow. SDK của Zahed c�
 ## License / Credits
 
 GFlow CLI © swissmarley, MIT; Google Flow CLI © Zahed Rastgar, MIT. Hai upstream là dự án độc lập, không liên kết Google.
+
+## Sửa lỗi Chrome debugging trên Windows
+
+Nếu **GFlow Doctor** báo `Could not start Google Chrome with a debugging port`, có hai nguyên nhân thường gặp:
+
+1. `swissmarley/gflow-cli` hiện có `findChromeProcessesForProfile()` trả về `[]` trên Windows. Vì vậy nó không tự đóng cửa sổ **Chrome đăng nhập** trước khi khởi động phiên Chrome có CDP. Hãy **đóng hoàn toàn cửa sổ Chrome do GFlow mở để đăng nhập**, không đóng Chrome cá nhân, rồi bấm Doctor. Không xóa profile/cookie.
+2. Chrome không nằm tại `C:\Program Files\Google\Chrome\Application\chrome.exe`. Vào Cài đặt → **Đường dẫn Google Chrome**, chọn `chrome.exe` ở thư mục cài đặt thật (ví dụ `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` hoặc AppData). Bấm **Chẩn đoán Chrome / profile** trước khi Doctor.
+
+Ứng dụng chỉ *kiểm tra* tiến trình Chrome sử dụng chính profile gflow và cảnh báo rõ ràng, không tự đóng Chrome hoặc xóa dữ liệu cá nhân. Khi lỗi thuộc upstream, cần sửa/chạy test trên máy Windows có Chrome đã đăng nhập để xác nhận hoạt động thực tế.

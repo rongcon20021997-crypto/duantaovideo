@@ -19,6 +19,7 @@ function normalizeWorkspace(input = {}, fallbackDir) {
  const character = input.character || {};
  return { name: safeText(input.name,"Dự án video mới").slice(0,120), topic: safeText(input.topic,"Nấu ăn món bò lúc lắc"), project: safeText(input.project),
  profile: /^[\w-]{1,40}$/.test(input.profile || "") ? input.profile : "default",
+ chromePath: safeText(input.chromePath).slice(0,1024),
  engine: input.engine === "sdk" ? "sdk" : "gflow",
  outputDir: safeText(input.outputDir,fallbackDir) || fallbackDir,
  ratio: input.ratio === "16:9" ? "16:9" : "9:16",
