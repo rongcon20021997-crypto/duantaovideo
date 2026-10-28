@@ -60,3 +60,16 @@ Nếu **GFlow Doctor** báo `Could not start Google Chrome with a debugging port
 2. Chrome không nằm tại `C:\Program Files\Google\Chrome\Application\chrome.exe`. Vào Cài đặt → **Đường dẫn Google Chrome**, chọn `chrome.exe` ở thư mục cài đặt thật (ví dụ `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` hoặc AppData). Bấm **Chẩn đoán Chrome / profile** trước khi Doctor.
 
 Ứng dụng chỉ *kiểm tra* tiến trình Chrome sử dụng chính profile gflow và cảnh báo rõ ràng, không tự đóng Chrome hoặc xóa dữ liệu cá nhân. Khi lỗi thuộc upstream, cần sửa/chạy test trên máy Windows có Chrome đã đăng nhập để xác nhận hoạt động thực tế.
+
+## Sửa lỗi `No Flow project is open and one could not be created`
+
+Bản tích hợp sử dụng navigator của `swissmarley/gflow-cli` với bản vá tương thích khi `npm install`:
+
+- Nếu Chrome đang ở project, tiếp tục dùng project đó.
+- Nếu Chrome ở dashboard và không chỉ định project, ưu tiên mở một project có sẵn; chỉ bấm `New project` một lần khi chưa có project nào.
+- Hỗ trợ nhãn `New project`, `Create project`, `Tạo dự án`, `Dự án mới`; chờ giao diện bất đồng bộ tải xong.
+- Nếu Flow đổi giao diện tiếp, mở https://flow.google.com bằng Chrome, vào một dự án, sao chép URL dạng `https://flow.google.com/project/<id>` vào **Cài đặt → Project Google Flow**, lưu dự án và tạo nhân vật lại.
+- Nếu dùng project name phải khớp nhãn project; URL/ID là lựa chọn đáng tin hơn.
+- Không tự động lặp nhấn Create: tránh tạo nhiều project ngoài ý muốn hoặc tiêu credits.
+
+**Lưu ý:** Google Flow web thực tế có thể thay đổi và không thể kiểm chứng trực tiếp nếu thiếu phiên đăng nhập tài khoản. Bản vá dựa vào DOM/Playwright của upstream, không gọi API nội bộ Google.
