@@ -66,10 +66,10 @@ Nếu **GFlow Doctor** báo `Could not start Google Chrome with a debugging port
 Bản tích hợp sử dụng navigator của `swissmarley/gflow-cli` với bản vá tương thích khi `npm install`:
 
 - Nếu Chrome đang ở project, tiếp tục dùng project đó.
-- Nếu Chrome ở dashboard và không chỉ định project, ưu tiên mở một project có sẵn; chỉ bấm `New project` một lần khi chưa có project nào.
-- Hỗ trợ nhãn `New project`, `Create project`, `Tạo dự án`, `Dự án mới`; chờ giao diện bất đồng bộ tải xong.
+- Nếu Chrome ở dashboard và không chỉ định project, ứng dụng chỉ mở project có sẵn và **không tự bấm New project**. Không có project sẽ báo lỗi rõ ràng.
+- Khi chưa có project, hãy tự bấm `+ New project` trong Google Flow, xác nhận trang project hoạt động bình thường rồi sao chép URL vào DuAnTaoVideo.
 - Nếu Flow đổi giao diện tiếp, mở https://flow.google.com bằng Chrome, vào một dự án, sao chép URL dạng `https://flow.google.com/project/<id>` vào **Cài đặt → Project Google Flow**, lưu dự án và tạo nhân vật lại.
 - Nếu dùng project name phải khớp nhãn project; URL/ID là lựa chọn đáng tin hơn.
-- Không tự động lặp nhấn Create: tránh tạo nhiều project ngoài ý muốn hoặc tiêu credits.
+- Không tự động nhấn Create project lần nào; nếu URL trả về `/404` hoặc `/404?reason=project`, ứng dụng dừng và hướng dẫn kiểm tra quyền tài khoản.
 
 **Lưu ý:** Google Flow web thực tế có thể thay đổi và không thể kiểm chứng trực tiếp nếu thiếu phiên đăng nhập tài khoản. Bản vá dựa vào DOM/Playwright của upstream, không gọi API nội bộ Google.
