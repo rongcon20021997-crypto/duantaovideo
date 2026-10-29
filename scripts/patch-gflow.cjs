@@ -18,6 +18,15 @@ function replaceNavigation(src){
   if(!src.slice(begin,end).includes(EXIST_START)) throw new Error("GFlow project navigator signature changed. Review upstream.");
   return before+navigatorSource+existingSource+after;
 }
+
+const OPEN_GOTO = 'await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" });';
+const OPEN_GUARD = 'if (!/\\/project\\/[0-9a-f-]{24,}/i.test(this.page.url())) await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" });';
+function patchFlowOpen(source) {
+  if(source.includes(OPEN_GUARD))return source;
+  if(!source.includes(OPEN_GOTO))throw Error("GFlow upstream FlowPage.open changed: cannot safely skip home navigation.");
+  return source.replace(OPEN_GOTO,OPEN_GUARD);
+}
+
 function patchGFlow(root=path.resolve(__dirname,"..")){
  const dir=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  let changed=0;
@@ -27,6 +36,7 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    const before=fs.readFileSync(file,"utf8");
    let after=before.split(oldUrl).join(newUrl);
    if(basename==="ui.js") after=replaceNavigation(after);
+   if(basename==="page.js") after=patchFlowOpen(after);
    if(!after.includes(newUrl))throw new Error("Expected Flow URL not found in "+basename);
    if(after!==before){fs.writeFileSync(file,after,"utf8");changed++;}
  }
@@ -36,4 +46,4 @@ if(require.main===module){
  try{const info=patchGFlow();console.log("GFlow project compatibility: "+info.origin+" ("+info.changed+" modules updated)");}
  catch(error){console.error("GFlow compatibility patch failed: "+error.message);process.exitCode=1;}
 }
-module.exports={patchGFlow,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
+module.exports={patchGFlow,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};

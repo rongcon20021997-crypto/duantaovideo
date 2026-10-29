@@ -81,3 +81,14 @@ Trong **Kịch bản**, chọn một cảnh rồi nhập **Prompt tạo ảnh ke
 Trong tab **Nhân vật**, nút **Tạo ảnh thử từ mô tả** tạo ảnh theo chữ, không sử dụng ảnh tham chiếu đã tải lên. Để dùng các ảnh tham chiếu này, chọn **Tạo nhân vật trên Google Flow**.
 
 Phải điền URL project có thể truy cập trong **Cài đặt**. Khi đang tạo ảnh, ứng dụng hiển thị hoạt động, log và sau khi tạo sẽ xác nhận đường dẫn file ảnh trên máy. Ứng dụng không tự tạo Flow project.
+
+## Project chuyển sang `/404`: kiểm tra đúng Chrome GFlow
+
+Với bản mới, **không đoán ID project** và không tự tạo project:
+1. Mở **Cài đặt → GFlow Doctor** để tạo phiên Chrome debugging đúng profile GFlow.
+2. Trong cửa sổ Chrome **do GFlow Doctor mở**, vào `https://flow.google.com`, đăng nhập tài khoản có quyền truy cập project, sau đó **tự bấm mở project** trong giao diện Flow. Nếu Chrome này mở project cũng chuyển `/404`, cần kiểm tra tài khoản/project trước; không thể khắc phục bằng việc đổi URL trong ứng dụng.
+3. Giữ nguyên tab project. Quay lại ứng dụng bấm **Dò project đang mở trong Chrome GFlow**. Ứng dụng chỉ đọc URL tab qua DevTools localhost, không đọc cookie, không điều khiển DOM hoặc sửa dữ liệu Flow.
+4. Nếu phát hiện một project, URL được lưu tự động vào workspace. Nếu có nhiều project, chọn đúng URL rồi bấm **Lưu dự án**.
+5. Tạo ảnh sau khi project đang mở khớp project đã chọn. Nếu có `/404` hoặc project sai profile, ứng dụng sẽ **dừng trước khi tốn credits**, ghi rõ lỗi và hướng dẫn.
+
+Thư viện `gflow-cli` được cập nhật tương thích khi `npm install` để **không tự tải lại trang chủ** nếu Chrome đã đang mở trình chỉnh sửa project. Phần tự động tạo ảnh/video vẫn được xử lý bởi upstream GFlow CLI.

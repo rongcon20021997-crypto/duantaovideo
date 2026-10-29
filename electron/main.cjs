@@ -4,6 +4,7 @@ const fs=require("node:fs"),fsp=fs.promises,path=require("node:path"),{spawn}=re
 const w=require("./lib/workflow.cjs");
 const chrome=require("./lib/chrome.cjs");
 const {imageCommand}=require("./lib/image.cjs");
+const flowProject=require("./lib/project.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -32,13 +33,32 @@ const timer=setTimeout(()=>child.kill(),timeout);let settled=false;
 child.on("error",e=>{if(!settled){settled=true;clearTimeout(timer);reject(e);}});
 child.on("close",code=>{clearTimeout(timer);if(active?.child===child)active.child=null;if(settled)return;settled=true;if(active?.cancelled)return reject(Error("Đã dừng theo yêu cầu."));if(code!==0){let detail=(err||out||"CLI không chạy thành công").slice(-2200);if(detail.includes("Could not start Google Chrome with a debugging port"))detail+="\nTrên Windows: đóng hẳn Chrome do GFlow mở để đăng nhập (KHÔNG phải Chrome cá nhân), kiểm tra đường dẫn chrome.exe trong Cài đặt rồi thử GFlow Doctor. Không xóa profile/cookie.";return reject(Error(detail));}resolve(out);});
 });}
+
+async function inspectGflowProject(ws){
+ const current=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+ const tip=chrome.guidance(current);
+ if(tip)throw Error(tip);
+ if(!current.debuggingReady)throw Error("Chrome GFlow chưa có phiên debugging đang hoạt động. Bấm GFlow Doctor, mở một project trong chính cửa sổ Chrome đó, rồi bấm Dò project.");
+ return flowProject.listTabs(current.debugPort);
+}
+async function requireOpenedGflowProject(ws){
+ const desired=flowProject.projectUrl(ws.project);
+ if(!desired)throw Error("URL project không hợp lệ. Mở một project trong Chrome GFlow và bấm Dò project đang mở; không sao chép URL từ Chrome khác.");
+ const tabs=await inspectGflowProject(ws);
+ if(!tabs.projects.includes(desired)){
+   const summary=tabs.projects.length?"Project đang mở trong Chrome GFlow: "+tabs.projects.join(" | "):flowProject.explain(tabs);
+   throw Error("Dừng tạo ảnh/nhân vật để tránh lỗi /404. URL project đã chọn KHÔNG khớp với project đang mở trong Chrome GFlow. "+summary+" Vào Cài đặt → Dò project đang mở để chọn đúng project. Không tự tạo dự án.");
+ }
+ return desired;
+}
+
 function flags(ws){return [...(ws.profile?["--profile",ws.profile]:[]),...(ws.project?["--project",ws.project]:[])];}
 function artifact(dir,id,extensions){const x=w.latestArtifact(dir,id,extensions);if(!x)throw Error("Lệnh hoàn tất nhưng chưa tìm được file "+id+" trong "+dir);return path.join(dir,x);}
 function sdk(autoLaunch=false){const raw=require("google-flow-cli"),FlowClient=raw.FlowClient||raw.default||raw;return new FlowClient({port:9222,autoLaunch});}
 async function sdkDoctor(){const c=sdk(false);try{return await c.doctor();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkProjects(){const c=sdk(true);try{return await c.listProjects();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkVideo(ws,scene,i,dir){const c=sdk(true);try{const p=path.join(dir,w.safeJobId("sdk-"+i+"-"+scene.id)+".mp4");const r=await c.runScene({mediaType:"video",model:ws.videoModel==="Omni Flash"?"Veo 3.1 - Fast":ws.videoModel,duration:String(scene.duration)+"s",aspect:ws.ratio,prompt:scene.prompt,generate:true,wait:true,timeout:1200,output:p});if(r.status!=="completed")throw Error("SDK chưa xác nhận video hoàn tất.");return r.download?.path||p;}finally{await c.disconnect().catch(()=>{});}}
-async function run(input){idle();const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");if(ws.engine==="gflow"&&!ws.project.trim())throw Error("Chưa chọn project Google Flow. Hãy dán URL project trong Cài đặt, lưu dự án rồi chạy.");
+async function run(input){idle();const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");if(ws.engine==="gflow")await requireOpenedGflowProject(ws);
 const state={cancelled:false,child:null};active=state;const dir=path.resolve(ws.outputDir);await fsp.mkdir(dir,{recursive:true});emit({kind:"run",running:true});
 try{if(ws.engine==="gflow" && ws.character.name){log("Kiểm tra nhân vật đã được lưu trong Flow...");const names=await cmd(["character","list",...flags(ws)],120000);if(!names.toLowerCase().includes(ws.character.name.toLowerCase()))throw Error("Không tìm thấy nhân vật "+ws.character.name+" trên Google Flow. Vào tab Nhân vật tạo hoặc chọn tên nhân vật đang tồn tại trước khi chạy.");}for(let i=0;i<ws.scenes.length;i++){const scene=ws.scenes[i];if(state.cancelled)break;if(scene.status==="completed"&&scene.video&&fs.existsSync(scene.video)){log("Bỏ qua cảnh đã hoàn thành: "+scene.title);continue;}
 scene.status="generating";scene.error=undefined;emit({kind:"scene",sceneId:scene.id,status:"generating"});log("Cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
@@ -69,7 +89,8 @@ ipcMain.handle("story:generate",(_,x)=>story(x));
 ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000,x?.chromePath);});
 ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
 ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
-ipcMain.handle("flow:character:create",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);if(!c.name.trim()||!c.prompt.trim())throw Error("Nhập tên và mô tả nhân vật trước khi tạo.");if(c.referenceImages.length>2)throw Error("Google Flow chỉ hỗ trợ 1–2 ảnh tham chiếu khi tạo Character. Vui lòng bớt ảnh.");for(const image of c.referenceImages){if(!path.isAbsolute(image)||!fs.existsSync(image))throw Error("Ảnh tham chiếu không tồn tại: "+image);}log("GFlow: mở dự án và tạo Character \""+c.name+"\" bằng prompt và "+c.referenceImages.length+" ảnh tham chiếu.");const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);const created=await cmd(args,1200000,ws.chromePath);log("Xác minh nhân vật đã xuất hiện trong Google Flow...");const names=await cmd(["character","list",...flags(ws)],120000,ws.chromePath);const found=names.split(/\r?\n/).some(line=>line.trim().toLocaleLowerCase()===c.name.trim().toLocaleLowerCase());if(!found)throw Error("GFlow CLI báo xong nhưng không thấy nhân vật \""+c.name+"\" trong danh sách Google Flow. Có thể Flow đã đổi giao diện hoặc chưa tạo thành công. Mở Google Flow kiểm tra project/Characters; không tiếp tục tạo video để tránh sai nhân vật.");return created+"\nĐã xác minh nhân vật: "+c.name;});
+ipcMain.handle("flow:project:detect",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const tabs=await inspectGflowProject(ws);const result={...tabs,message:flowProject.explain(tabs)};if(tabs.projects.length===1){const next=await save({...ws,project:tabs.projects[0]});result.savedProject=next.project;log("Đã lấy project thực sự mở trong Chrome GFlow: "+next.project);}return result;});
+ipcMain.handle("flow:character:create",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;await requireOpenedGflowProject(ws);const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);if(!c.name.trim()||!c.prompt.trim())throw Error("Nhập tên và mô tả nhân vật trước khi tạo.");if(c.referenceImages.length>2)throw Error("Google Flow chỉ hỗ trợ 1–2 ảnh tham chiếu khi tạo Character. Vui lòng bớt ảnh.");for(const image of c.referenceImages){if(!path.isAbsolute(image)||!fs.existsSync(image))throw Error("Ảnh tham chiếu không tồn tại: "+image);}log("GFlow: mở dự án và tạo Character \""+c.name+"\" bằng prompt và "+c.referenceImages.length+" ảnh tham chiếu.");const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);const created=await cmd(args,1200000,ws.chromePath);log("Xác minh nhân vật đã xuất hiện trong Google Flow...");const names=await cmd(["character","list",...flags(ws)],120000,ws.chromePath);const found=names.split(/\r?\n/).some(line=>line.trim().toLocaleLowerCase()===c.name.trim().toLocaleLowerCase());if(!found)throw Error("GFlow CLI báo xong nhưng không thấy nhân vật \""+c.name+"\" trong danh sách Google Flow. Có thể Flow đã đổi giao diện hoặc chưa tạo thành công. Mở Google Flow kiểm tra project/Characters; không tiếp tục tạo video để tránh sai nhân vật.");return created+"\nĐã xác minh nhân vật: "+c.name;});
 ipcMain.handle("flow:character:list",(_,x)=>{idle();return cmd(["character","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
 ipcMain.handle("flow:media:list",(_,x)=>{idle();return cmd(["media","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
 ipcMain.handle("flow:extend",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const ref=String(x?.sceneId||x?.mediaId||"").trim(),prompt=String(x?.prompt||"").trim();if(!ref||!prompt)throw Error("Nhập Scene/Media ID và prompt nối tiếp.");return cmd(["extend",...(x?.sceneId?["--scene",ref]:["--media-id",ref]),"--prompt",prompt,"--out",ws.outputDir,...flags(ws)],1200000);});
@@ -90,6 +111,7 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
   const prompt=target==="character" ? [ws.character.prompt,ws.character.description].filter(Boolean).join(". ") : scene.imagePrompt;
   // A blank project makes upstream GFlow click New Project: require a real project.
   const job=imageCommand(ws,{id:"image-"+(scene?w.safeJobId(scene.id):"character")+"-"+Date.now(),prompt,useSavedCharacter:payload?.useSavedCharacter===true});
+  await requireOpenedGflowProject(ws);
   const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
   const tip=chrome.guidance(state);if(tip)throw new Error(tip);
   await fsp.mkdir(job.dir,{recursive:true});

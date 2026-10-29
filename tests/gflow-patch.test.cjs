@@ -14,7 +14,7 @@ test("patch changes domain and project navigator, idempotently",()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),"duanta-flow-"));
  const dir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  fs.mkdirSync(dir,{recursive:true});
- fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow";');
+ fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } }');
  fs.writeFileSync(path.join(dir,"ui.js"),fixture);
  try{
   assert.equal(patchGFlow(temp).changed,2);
@@ -23,6 +23,9 @@ test("patch changes domain and project navigator, idempotently",()=>{
   assert.ok(!ui.includes("createControl.click"));
   assert.ok(ui.includes("KHÔNG tự bấm Tạo dự án"));
   assert.ok(ui.includes(newUrl));
+  const page=fs.readFileSync(path.join(dir,"page.js"),"utf8");
+  assert.ok(page.includes("if (!/\\/project\\/"));
+  assert.ok(page.includes(newUrl));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
 test("navigator patch refuses mismatched upstream instead of silently corrupting library",()=>{
@@ -64,4 +67,13 @@ test("invalid project permission redirects to 404 and aborts",async()=>{
  let current="https://flow.google.com/";
  const page={url:()=>current,goto:async()=>{current="https://flow.google.com/404?reason=project";},waitForTimeout:async()=>{}};
  await assert.rejects(()=>fn(page,"https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000"),/\/404/);
+});
+
+test("FlowPage.open preserves an editor already showing an authenticated project",()=>{
+ const {patchFlowOpen}=require("../scripts/patch-gflow.cjs");
+ const src='await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" });';
+ const patched=patchFlowOpen(src);
+ assert.match(patched,/this\.page\.url\(\)/);
+ assert.match(patched,/\/project/);
+ assert.equal(patchFlowOpen(patched),patched);
 });
