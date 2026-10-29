@@ -14,10 +14,14 @@ test("patch changes domain and project navigator, idempotently",()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),"duanta-flow-"));
  const dir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  fs.mkdirSync(dir,{recursive:true});
+ const browserDir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src","browser");
+ fs.mkdirSync(browserDir,{recursive:true});
+ fs.writeFileSync(path.join(browserDir,"session.js"),
+  'const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find((page) => page.url().includes("labs.google")); }');
  fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } }');
  fs.writeFileSync(path.join(dir,"ui.js"),fixture);
  try{
-  assert.equal(patchGFlow(temp).changed,2);
+  assert.equal(patchGFlow(temp).changed,3);
   assert.equal(patchGFlow(temp).changed,0);
   const ui=fs.readFileSync(path.join(dir,"ui.js"),"utf8");
   assert.ok(!ui.includes("createControl.click"));
@@ -26,6 +30,9 @@ test("patch changes domain and project navigator, idempotently",()=>{
   const page=fs.readFileSync(path.join(dir,"page.js"),"utf8");
   assert.ok(page.includes("if (!/\\/project\\/"));
   assert.ok(page.includes(newUrl));
+  const session=fs.readFileSync(path.join(browserDir,"session.js"),"utf8");
+  assert.ok(session.includes("const existingPort = await readDevToolsPort(profileDir);"));
+  assert.ok(session.includes('page.url().includes("flow.google.com")'));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
 test("navigator patch refuses mismatched upstream instead of silently corrupting library",()=>{
@@ -76,4 +83,13 @@ test("FlowPage.open preserves an editor already showing an authenticated project
  assert.match(patched,/this\.page\.url\(\)/);
  assert.match(patched,/\/project/);
  assert.equal(patchFlowOpen(patched),patched);
+});
+
+test("Windows GFlow browser session reuses active debug port and recognizes new Flow host",()=>{
+ const {patchBrowserSession}=require("../scripts/patch-gflow.cjs");
+ const old='const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; const selected=page.url().includes("labs.google");';
+ const patched=patchBrowserSession(old);
+ assert.ok(patched.includes("const existingPort = await readDevToolsPort(profileDir);"));
+ assert.ok(patched.includes('page.url().includes("flow.google.com")'));
+ assert.equal(patchBrowserSession(patched),patched);
 });

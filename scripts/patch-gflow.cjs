@@ -27,6 +27,21 @@ function patchFlowOpen(source) {
   return source.replace(OPEN_GOTO,OPEN_GUARD);
 }
 
+
+function patchBrowserSession(source){
+  // Upstream only checks running processes using "ps" and returns [] on Windows.
+  // Reuse the authenticated Chrome's DevToolsActivePort on Windows as on macOS/Linux.
+  const oldPort="const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined;";
+  const newPort="const existingPort = await readDevToolsPort(profileDir);";
+  if(source.includes(oldPort))source=source.replace(oldPort,newPort);
+  else if(!source.includes(newPort))throw Error("Upstream GFlow browser session port detection changed. Review pinned version.");
+  const oldSelector='page.url().includes("labs.google")';
+  const newSelector='(page.url().includes("flow.google.com") || page.url().includes("labs.google"))';
+  if(source.includes(newSelector))return source;
+  if(!source.includes(oldSelector))throw Error("Upstream GFlow browser tab matcher changed. Review pinned version.");
+  return source.replace(oldSelector,newSelector);
+}
+
 function patchGFlow(root=path.resolve(__dirname,"..")){
  const dir=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  let changed=0;
@@ -40,10 +55,15 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    if(!after.includes(newUrl))throw new Error("Expected Flow URL not found in "+basename);
    if(after!==before){fs.writeFileSync(file,after,"utf8");changed++;}
  }
- return {changed,modules:modules.length,origin:newUrl};
+ const sessionPath=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","browser","session.js");
+ if(!fs.existsSync(sessionPath))throw Error("Missing upstream browser/session.js");
+ const prevSession=fs.readFileSync(sessionPath,"utf8");
+ const nextSession=patchBrowserSession(prevSession);
+ if(nextSession!==prevSession){fs.writeFileSync(sessionPath,nextSession,"utf8");changed++;}
+ return {changed,modules:modules.length+1,origin:newUrl};
 }
 if(require.main===module){
  try{const info=patchGFlow();console.log("GFlow project compatibility: "+info.origin+" ("+info.changed+" modules updated)");}
  catch(error){console.error("GFlow compatibility patch failed: "+error.message);process.exitCode=1;}
 }
-module.exports={patchGFlow,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
+module.exports={patchGFlow,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
