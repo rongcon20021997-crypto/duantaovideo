@@ -60,7 +60,7 @@ test("no accessible project: fail safely without clicking New Project",async()=>
  const vm=require("node:vm");
  const fn=vm.runInNewContext(
    navigatorSource.replace(/^export /,"")+"\nnavigateToProject",
-   {URL,FLOW_BASE:"https://flow.google.com",
+   {URL,process:{env:{}},FLOW_BASE:"https://flow.google.com",
      projectIdFromUrl:u=>String(u).match(/\/project\/([0-9a-f-]+)/i)?.[1],
      projectSubUrl:id=>"https://flow.google.com/project/"+id});
  let current="https://flow.google.com/",clicks=0;
@@ -78,7 +78,7 @@ test("invalid project permission redirects to 404 and aborts",async()=>{
  const vm=require("node:vm");
  const fn=vm.runInNewContext(
    navigatorSource.replace(/^export /,"")+"\nnavigateToProject",
-   {URL,FLOW_BASE:"https://flow.google.com",
+   {URL,process:{env:{}},FLOW_BASE:"https://flow.google.com",
      projectIdFromUrl:u=>String(u).match(/\/project\/([0-9a-f-]+)/i)?.[1],
      projectSubUrl:id=>"https://flow.google.com/project/"+id});
  let current="https://flow.google.com/";

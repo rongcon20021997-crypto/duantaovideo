@@ -51,8 +51,8 @@ function patchBrowserSession(source){
 function patchCliKeepCurrentTab(source){
  const old='await session.page.goto(FLOW_URL, { waitUntil: "domcontentloaded" }).catch(() => undefined);';
  const updated='if (process.env.GFLOW_USE_CURRENT_TAB !== "1") await session.page.goto(FLOW_URL, { waitUntil: "domcontentloaded" }).catch(() => undefined);';
- if(source.includes(old))return source.split(old).join(updated);
  if(source.includes(updated))return source;
+ if(source.includes(old))return source.split(old).join(updated);
  throw Error("Upstream GFlow CLI navigation changed.");
 }
 function patchCharacterKeepCurrentTab(source){
@@ -62,8 +62,9 @@ function patchCharacterKeepCurrentTab(source){
  ];
  for(const original of routes){
    const modified='if (process.env.GFLOW_USE_CURRENT_TAB !== "1") '+original;
+   if(source.includes(modified))continue;
    if(source.includes(original))source=source.split(original).join(modified);
-   else if(!source.includes(modified))throw Error("Upstream GFlow Character routing changed: "+original);
+   else throw Error("Upstream GFlow Character routing changed: "+original);
  }
  return source;
 }
