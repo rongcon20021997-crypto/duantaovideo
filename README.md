@@ -73,3 +73,11 @@ Bản tích hợp sử dụng navigator của `swissmarley/gflow-cli` với bả
 - Không tự động nhấn Create project lần nào; nếu URL trả về `/404` hoặc `/404?reason=project`, ứng dụng dừng và hướng dẫn kiểm tra quyền tài khoản.
 
 **Lưu ý:** Google Flow web thực tế có thể thay đổi và không thể kiểm chứng trực tiếp nếu thiếu phiên đăng nhập tài khoản. Bản vá dựa vào DOM/Playwright của upstream, không gọi API nội bộ Google.
+
+## Tạo ảnh riêng, không cần chạy video
+
+Trong **Kịch bản**, chọn một cảnh rồi nhập **Prompt tạo ảnh keyframe** và bấm **Tạo ảnh cảnh này**. Nếu muốn dùng nhân vật đã tạo trong Flow, bật mục **Dùng nhân vật đã lưu**. Nếu chưa có Character, bỏ mục này để tạo ảnh bình thường.
+
+Trong tab **Nhân vật**, nút **Tạo ảnh thử từ mô tả** tạo ảnh theo chữ, không sử dụng ảnh tham chiếu đã tải lên. Để dùng các ảnh tham chiếu này, chọn **Tạo nhân vật trên Google Flow**.
+
+Phải điền URL project có thể truy cập trong **Cài đặt**. Khi đang tạo ảnh, ứng dụng hiển thị hoạt động, log và sau khi tạo sẽ xác nhận đường dẫn file ảnh trên máy. Ứng dụng không tự tạo Flow project.

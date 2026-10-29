@@ -3,6 +3,7 @@ const {app,BrowserWindow,ipcMain,dialog,shell,safeStorage}=require("electron");
 const fs=require("node:fs"),fsp=fs.promises,path=require("node:path"),{spawn}=require("node:child_process");
 const w=require("./lib/workflow.cjs");
 const chrome=require("./lib/chrome.cjs");
+const {imageCommand}=require("./lib/image.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -37,7 +38,7 @@ function sdk(autoLaunch=false){const raw=require("google-flow-cli"),FlowClient=r
 async function sdkDoctor(){const c=sdk(false);try{return await c.doctor();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkProjects(){const c=sdk(true);try{return await c.listProjects();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkVideo(ws,scene,i,dir){const c=sdk(true);try{const p=path.join(dir,w.safeJobId("sdk-"+i+"-"+scene.id)+".mp4");const r=await c.runScene({mediaType:"video",model:ws.videoModel==="Omni Flash"?"Veo 3.1 - Fast":ws.videoModel,duration:String(scene.duration)+"s",aspect:ws.ratio,prompt:scene.prompt,generate:true,wait:true,timeout:1200,output:p});if(r.status!=="completed")throw Error("SDK chưa xác nhận video hoàn tất.");return r.download?.path||p;}finally{await c.disconnect().catch(()=>{});}}
-async function run(input){idle();const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");
+async function run(input){idle();const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");if(ws.engine==="gflow"&&!ws.project.trim())throw Error("Chưa chọn project Google Flow. Hãy dán URL project trong Cài đặt, lưu dự án rồi chạy.");
 const state={cancelled:false,child:null};active=state;const dir=path.resolve(ws.outputDir);await fsp.mkdir(dir,{recursive:true});emit({kind:"run",running:true});
 try{if(ws.engine==="gflow" && ws.character.name){log("Kiểm tra nhân vật đã được lưu trong Flow...");const names=await cmd(["character","list",...flags(ws)],120000);if(!names.toLowerCase().includes(ws.character.name.toLowerCase()))throw Error("Không tìm thấy nhân vật "+ws.character.name+" trên Google Flow. Vào tab Nhân vật tạo hoặc chọn tên nhân vật đang tồn tại trước khi chạy.");}for(let i=0;i<ws.scenes.length;i++){const scene=ws.scenes[i];if(state.cancelled)break;if(scene.status==="completed"&&scene.video&&fs.existsSync(scene.video)){log("Bỏ qua cảnh đã hoàn thành: "+scene.title);continue;}
 scene.status="generating";scene.error=undefined;emit({kind:"scene",sceneId:scene.id,status:"generating"});log("Cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
@@ -79,6 +80,43 @@ ipcMain.handle("flow:tool:create",(_,x)=>{idle();const ws=w.normalizeWorkspace(x
 ipcMain.handle("flow:tool:list",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());return cmd(["tool","list",...flags(ws)],120000);});
 ipcMain.handle("flow:scene:list",(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());return cmd(["scene","list",...flags(ws)],120000);});
 ipcMain.handle("flow:batch",(_,x)=>{idle();const file=String(x?.file||"");if(!path.isAbsolute(file)||!/\.ya?ml$/i.test(file)||!fs.existsSync(file))throw Error("Chọn file pipeline YAML hợp lệ.");const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());return cmd(["batch",file,"--out",ws.outputDir],3600000);});
+
+ipcMain.handle("flow:image:create",async(_event,payload)=>{
+  idle();
+  const ws=w.normalizeWorkspace(payload?.workspace||workspace(),output());
+  const target=payload?.target==="character"?"character":"scene";
+  const scene=target==="scene"?ws.scenes.find(s=>s.id===payload?.sceneId):null;
+  if(target==="scene"&&!scene)throw new Error("Không tìm thấy phân cảnh, hãy chọn cảnh trước khi tạo ảnh.");
+  const prompt=target==="character" ? [ws.character.prompt,ws.character.description].filter(Boolean).join(". ") : scene.imagePrompt;
+  // A blank project makes upstream GFlow click New Project: require a real project.
+  const job=imageCommand(ws,{id:"image-"+(scene?w.safeJobId(scene.id):"character")+"-"+Date.now(),prompt,useSavedCharacter:payload?.useSavedCharacter===true});
+  const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+  const tip=chrome.guidance(state);if(tip)throw new Error(tip);
+  await fsp.mkdir(job.dir,{recursive:true});
+  active={cancelled:false,child:null};
+  emit({kind:"run",running:true});
+  try{
+    log("BẮT ĐẦU TẠO ẢNH: "+(scene?scene.title:"nhân vật")+" | "+ws.imageModel);
+    log("Project: "+ws.project+" | Profile: "+ws.profile+" | Lưu: "+job.dir);
+    if(scene)emit({kind:"scene",sceneId:scene.id,status:"generating"});
+    await cmd(job.args,15*60*1000,ws.chromePath);
+    if(active.cancelled)throw new Error("Đã hủy tác vụ tạo ảnh.");
+    const file=artifact(job.dir,job.id,[".png",".jpg",".jpeg",".webp"]);
+    if(scene){scene.image=file;scene.error=undefined;scene.status="pending";}
+    else ws.character.thumbnail=file;
+    await save(ws);
+    if(scene)emit({kind:"scene",sceneId:scene.id,status:"pending",image:file});
+    log("ĐÃ TẠO ẢNH: "+file);
+    return {image:file,sceneId:scene?.id||null,target};
+  }catch(e){
+    const message=String(e.message||e);
+    log("LỖI TẠO ẢNH: "+message);
+    if(scene)emit({kind:"scene",sceneId:scene.id,status:"failed",error:message});
+    throw e;
+  }finally{
+    active=null;emit({kind:"run",running:false});
+  }
+});
 ipcMain.handle("flow:run",(_,x)=>run(x));ipcMain.handle("flow:stop",()=>{if(!active)return false;active.cancelled=true;active.child?.kill();log("Đã yêu cầu dừng.");return true;});
 ipcMain.handle("flow:sdkDoctor",()=>sdkDoctor());ipcMain.handle("flow:sdkProjects",()=>{idle();return sdkProjects();});
 ipcMain.handle("flow:sdkCreateProject",async(_,x)=>{idle();const c=sdk(true);try{return await c.createProject({title:String(x?.title||"Dự án video").slice(0,120)});}finally{await c.disconnect().catch(()=>{});}});
@@ -87,7 +125,7 @@ ipcMain.handle("dialog:pickImages",async()=>{const r=await dialog.showOpenDialog
 ipcMain.handle("dialog:pickYaml",async()=>{const r=await dialog.showOpenDialog(win,{properties:["openFile"],filters:[{name:"YAML pipeline",extensions:["yaml","yml"]}]});return r.canceled?null:r.filePaths[0];});
 ipcMain.handle("workspace:chooseOutput",async()=>{const r=await dialog.showOpenDialog(win,{properties:["openDirectory"]});return r.canceled?null:r.filePaths[0];});
 ipcMain.handle("shell:openPath",(_,p)=>{if(!path.isAbsolute(String(p||""))||!fs.existsSync(p))throw Error("File không hợp lệ.");return shell.openPath(p);});
-ipcMain.handle("shell:openFlow",()=>shell.openExternal("https://labs.google/fx/tools/flow"));
+ipcMain.handle("shell:openFlow",()=>shell.openExternal("https://flow.google.com/"));
 }
 function createWindow(){win=new BrowserWindow({width:1480,height:940,minWidth:1050,minHeight:690,backgroundColor:"#090f1a",title:"DuAnTaoVideo | Flow Studio",webPreferences:{preload:path.join(__dirname,"preload.cjs"),contextIsolation:true,nodeIntegration:false,sandbox:false}});
 win.webContents.setWindowOpenHandler(()=>({action:"deny"}));win.webContents.on("will-navigate",(e,url)=>{if(!url.startsWith("http://127.0.0.1:5173/")&&!url.startsWith("file://"))e.preventDefault();});
