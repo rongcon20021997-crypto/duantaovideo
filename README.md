@@ -92,3 +92,15 @@ Với bản mới, **không đoán ID project** và không tự tạo project:
 5. Tạo ảnh sau khi project đang mở khớp project đã chọn. Nếu có `/404` hoặc project sai profile, ứng dụng sẽ **dừng trước khi tốn credits**, ghi rõ lỗi và hướng dẫn.
 
 Thư viện `gflow-cli` được cập nhật tương thích khi `npm install` để **không tự tải lại trang chủ** nếu Chrome đã đang mở trình chỉnh sửa project. Phần tự động tạo ảnh/video vẫn được xử lý bởi upstream GFlow CLI.
+
+## Chế độ thao tác ngay trên tab đã mở (không tự mở project)
+
+Khi tạo ảnh hoặc video bằng GFlow CLI, ứng dụng sử dụng tab Google Flow hiện có trong **cửa sổ Chrome debugging thuộc profile GFlow**. Không điều hướng về trang chủ hoặc tự mở lại URL project; nếu không thấy đúng tab, tác vụ dừng trước khi gửi lệnh tạo.
+
+1. Đăng nhập bằng chức năng **Đăng nhập Chrome** nếu cần. Đóng phiên đăng nhập thường của GFlow theo hướng dẫn và bấm **GFlow Doctor** để mở Chrome debugging.
+2. Trong **cửa sổ Chrome do GFlow Doctor mở**, tự vào Google Flow và mở một project thực sự hiển thị trình chỉnh sửa.
+3. Giữ tab đang mở. Vào **Cài đặt → Dò project đang mở trong Chrome GFlow** để lấy URL từ đúng phiên, không lấy URL từ Chrome cá nhân.
+4. Vào **Kịch bản → Tạo ảnh cảnh này**. Tác vụ tự gắn vào tab đã chọn, dùng thao tác DOM của thư viện gflow-cli và tải ảnh khi hoàn thành.
+
+**Giới hạn:** Không thể tự động điều khiển một Chrome thông thường nếu Chrome đó chưa bật remote debugging/CDP. Không đưa tài khoản đang đăng nhập cá nhân sang profile GFlow một cách âm thầm. Phần nhân vật phụ thuộc giao diện Characters mà upstream hỗ trợ; nếu tab chưa ở màn hình Character, có thể cần chuyển tab bằng tay. Không bypass đăng nhập, 404, hay giới hạn tài khoản.
+

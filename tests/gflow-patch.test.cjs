@@ -17,11 +17,16 @@ test("patch changes domain and project navigator, idempotently",()=>{
  const browserDir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src","browser");
  fs.mkdirSync(browserDir,{recursive:true});
  fs.writeFileSync(path.join(browserDir,"session.js"),
-  'const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find((page) => page.url().includes("labs.google")); }');
+  'const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find((page) => page.url().includes("labs.google")); } // Bundled-Chromium path\nif (!browser) { launchChrome(); }');
  fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } }');
  fs.writeFileSync(path.join(dir,"ui.js"),fixture);
+ fs.writeFileSync(path.join(dir,"characters.js"),
+ 'await this.page.goto(projectSubUrl(projectId, "characters"), { waitUntil: "domcontentloaded" }); await this.page.goto(projectSubUrl(projectId, ""), { waitUntil: "domcontentloaded" });');
+ const cliDir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src");
+ fs.writeFileSync(path.join(cliDir,"cli.js"),
+ 'await session.page.goto(FLOW_URL, { waitUntil: "domcontentloaded" }).catch(() => undefined);');
  try{
-  assert.equal(patchGFlow(temp).changed,3);
+  assert.equal(patchGFlow(temp).changed,5);
   assert.equal(patchGFlow(temp).changed,0);
   const ui=fs.readFileSync(path.join(dir,"ui.js"),"utf8");
   assert.ok(!ui.includes("createControl.click"));
@@ -33,6 +38,11 @@ test("patch changes domain and project navigator, idempotently",()=>{
   const session=fs.readFileSync(path.join(browserDir,"session.js"),"utf8");
   assert.ok(session.includes("const existingPort = await readDevToolsPort(profileDir);"));
   assert.ok(session.includes('page.url().includes("flow.google.com")'));
+  assert.ok(session.includes("GFLOW_USE_CURRENT_TAB"));
+  const cli=fs.readFileSync(path.join(browserDir,"..","cli.js"),"utf8");
+  assert.ok(cli.includes('process.env.GFLOW_USE_CURRENT_TAB !== "1"'));
+  const chars=fs.readFileSync(path.join(dir,"characters.js"),"utf8");
+  assert.ok(chars.includes('process.env.GFLOW_USE_CURRENT_TAB !== "1"'));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
 test("navigator patch refuses mismatched upstream instead of silently corrupting library",()=>{
@@ -87,9 +97,34 @@ test("FlowPage.open preserves an editor already showing an authenticated project
 
 test("Windows GFlow browser session reuses active debug port and recognizes new Flow host",()=>{
  const {patchBrowserSession}=require("../scripts/patch-gflow.cjs");
- const old='const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; const selected=page.url().includes("labs.google");';
+ const old='const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find(page => page.url().includes("labs.google")); } // Bundled-Chromium path\nif (!browser) { launchChrome(); }';
  const patched=patchBrowserSession(old);
  assert.ok(patched.includes("const existingPort = await readDevToolsPort(profileDir);"));
  assert.ok(patched.includes('page.url().includes("flow.google.com")'));
  assert.equal(patchBrowserSession(patched),patched);
+});
+
+test("current-tab mode never navigates to a project URL when editor is already open",async()=>{
+ const vm=require("node:vm");
+ const fn=vm.runInNewContext(
+   navigatorSource.replace(/^export /,"")+"\nnavigateToProject",
+   {URL,process:{env:{GFLOW_USE_CURRENT_TAB:"1"}},FLOW_BASE:"https://flow.google.com",
+    projectIdFromUrl:url=>String(url).match(/\/project\/([0-9a-f-]+)/i)?.[1],
+    projectSubUrl:id=>"https://flow.google.com/project/"+id});
+ const url="https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000";
+ let navigations=0;
+ const page={url:()=>url,goto:()=>{navigations++;throw Error("Navigation prohibited");}};
+ const id=await fn(page,url);
+ assert.equal(id,"123e4567-e89b-12d3-a456-426614174000");
+ assert.equal(navigations,0);
+});
+test("current-tab mode stops on mismatched project without navigating",async()=>{
+ const vm=require("node:vm");
+ const fn=vm.runInNewContext(
+   navigatorSource.replace(/^export /,"")+"\nnavigateToProject",
+   {URL,process:{env:{GFLOW_USE_CURRENT_TAB:"1"}},FLOW_BASE:"https://flow.google.com",
+    projectIdFromUrl:url=>String(url).match(/\/project\/([0-9a-f-]+)/i)?.[1]});
+ const page={url:()=>"https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000",
+   goto:()=>{throw Error("Unwanted navigation");}};
+ await assert.rejects(()=>fn(page,"https://flow.google.com/project/999e4567-e89b-12d3-a456-426614174999"),/không trùng project/);
 });
