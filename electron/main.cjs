@@ -5,6 +5,7 @@ const w=require("./lib/workflow.cjs");
 const chrome=require("./lib/chrome.cjs");
 const {imageCommand}=require("./lib/image.cjs");
 const flowProject=require("./lib/project.cjs");
+const {inspectFlowUi}=require("./lib/flow-diagnostics.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -52,6 +53,16 @@ async function requireOpenedGflowProject(ws){
  return desired;
 }
 
+
+async function diagnoseOpenFlow(ws,capture=false){
+ const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+ const tip=chrome.guidance(state);
+ if(tip)throw Error(tip);
+ if(!state.debuggingReady)throw Error("Không có Chrome GFlow debugging đang hoạt động. Bấm GFlow Doctor trước.");
+ const result=await inspectFlowUi({port:state.debugPort,projectUrl:ws.project,cliPath:cliPath(),dir:path.join(path.resolve(ws.outputDir),"diagnostics"),capture});
+ return result;
+}
+
 function flags(ws){return [...(ws.profile?["--profile",ws.profile]:[]),...(ws.project?["--project",ws.project]:[])];}
 function artifact(dir,id,extensions){const x=w.latestArtifact(dir,id,extensions);if(!x)throw Error("Lệnh hoàn tất nhưng chưa tìm được file "+id+" trong "+dir);return path.join(dir,x);}
 function sdk(autoLaunch=false){const raw=require("google-flow-cli"),FlowClient=raw.FlowClient||raw.default||raw;return new FlowClient({port:9222,autoLaunch});}
@@ -89,6 +100,7 @@ ipcMain.handle("story:generate",(_,x)=>story(x));
 ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000,x?.chromePath);});
 ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
 ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
+ipcMain.handle("flow:diagnose",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());await requireOpenedGflowProject(ws);const result=await diagnoseOpenFlow(ws,true);log("Chẩn đoán giao diện Flow: "+result.reason+" | "+(result.screenshot||result.jsonPath||"không có ảnh chụp"));return result;});
 ipcMain.handle("flow:project:detect",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const tabs=await inspectGflowProject(ws);const result={...tabs,message:flowProject.explain(tabs)};if(tabs.projects.length===1){const next=await save({...ws,project:tabs.projects[0]});result.savedProject=next.project;log("Đã lấy project thực sự mở trong Chrome GFlow: "+next.project);}return result;});
 ipcMain.handle("flow:character:create",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;await requireOpenedGflowProject(ws);const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);if(!c.name.trim()||!c.prompt.trim())throw Error("Nhập tên và mô tả nhân vật trước khi tạo.");if(c.referenceImages.length>2)throw Error("Google Flow chỉ hỗ trợ 1–2 ảnh tham chiếu khi tạo Character. Vui lòng bớt ảnh.");for(const image of c.referenceImages){if(!path.isAbsolute(image)||!fs.existsSync(image))throw Error("Ảnh tham chiếu không tồn tại: "+image);}log("GFlow: mở dự án và tạo Character \""+c.name+"\" bằng prompt và "+c.referenceImages.length+" ảnh tham chiếu.");const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);const created=await cmd(args,1200000,ws.chromePath,ws.project);log("Xác minh nhân vật đã xuất hiện trong Google Flow...");const names=await cmd(["character","list",...flags(ws)],120000,ws.chromePath,ws.project);const found=names.split(/\r?\n/).some(line=>line.trim().toLocaleLowerCase()===c.name.trim().toLocaleLowerCase());if(!found)throw Error("GFlow CLI báo xong nhưng không thấy nhân vật \""+c.name+"\" trong danh sách Google Flow. Có thể Flow đã đổi giao diện hoặc chưa tạo thành công. Mở Google Flow kiểm tra project/Characters; không tiếp tục tạo video để tránh sai nhân vật.");return created+"\nĐã xác minh nhân vật: "+c.name;});
 ipcMain.handle("flow:character:list",(_,x)=>{idle();return cmd(["character","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
@@ -115,6 +127,11 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
   const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
   const tip=chrome.guidance(state);if(tip)throw new Error(tip);
   await fsp.mkdir(job.dir,{recursive:true});
+  log("KIỂM TRA TAB FLOW: "+ws.project);
+  const inspection=await diagnoseOpenFlow(ws,false);
+  log("Kết quả kiểm tra: "+inspection.reason+(inspection.submitLabels.length?" | Nút: "+inspection.submitLabels.join(", "):""));
+  if(!inspection.prompts)throw Error("Không thể tạo ảnh: "+inspection.reason+" Ảnh chụp kiểm tra: "+(inspection.screenshot||"không chụp được")+". Trang Flow đã đổi hoặc bạn chưa ở màn hình trình chỉnh sửa.");
+  if(!inspection.ready)log("Lưu ý: Chưa phát hiện nút Generate Image trước khi điền prompt. Sẽ kiểm tra lại khi gửi lệnh.");
   active={cancelled:false,child:null};
   emit({kind:"run",running:true});
   try{
@@ -133,8 +150,14 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
   }catch(e){
     const message=String(e.message||e);
     log("LỖI TẠO ẢNH: "+message);
+    let report="";
+    try{
+      const check=await diagnoseOpenFlow(ws,true);
+      report=check.screenshot||check.jsonPath||"";
+      log("ẢNH CHẨN ĐOÁN LỖI: "+report);
+    }catch(diagError){log("Không chụp được giao diện lỗi: "+String(diagError.message||diagError));}
     if(scene)emit({kind:"scene",sceneId:scene.id,status:"failed",error:message});
-    throw e;
+    throw Error(message+(report?"\nẢnh chụp chẩn đoán trên máy: "+report:""));
   }finally{
     active=null;emit({kind:"run",running:false});
   }

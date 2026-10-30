@@ -104,3 +104,11 @@ Khi tạo ảnh hoặc video bằng GFlow CLI, ứng dụng sử dụng tab Goog
 
 **Giới hạn:** Không thể tự động điều khiển một Chrome thông thường nếu Chrome đó chưa bật remote debugging/CDP. Không đưa tài khoản đang đăng nhập cá nhân sang profile GFlow một cách âm thầm. Phần nhân vật phụ thuộc giao diện Characters mà upstream hỗ trợ; nếu tab chưa ở màn hình Character, có thể cần chuyển tab bằng tay. Không bypass đăng nhập, 404, hay giới hạn tài khoản.
 
+
+## Chẩn đoán tạo ảnh khi Chrome không thao tác
+
+- Sau khi GFlow Doctor, mở project thủ công trong cửa sổ Chrome GFlow.
+- Vào Cài đặt → Dò project đang mở, rồi bấm Chẩn đoán màn hình tạo ảnh. Đây là bước chỉ đọc, không gửi lệnh tạo và không tốn lượt.
+- Ứng dụng kiểm tra ô nhập prompt và nút Generate Image/Create, liệt kê nhãn điều khiển và lưu ảnh chụp màn hình ở thư mục Đầu ra/diagnostics. Không lưu cookie hay nội dung HTML. Ảnh chụp có thể chứa thông tin cá nhân hiển thị trên màn hình: xem lại trước khi chia sẻ.
+- Khi bấm Tạo ảnh, ứng dụng chạy bước kiểm tra, phát log gflow stage và chỉ báo hoàn thành khi tìm thấy file ảnh tải về. Nếu lệnh lỗi, ảnh chụp được lưu trong máy và đường dẫn được hiển thị. Không tự thử lại hoặc gửi trùng lệnh có thể tốn lượt.
+- Nếu Chrome có sẵn project nhưng không nhận ô prompt hoặc nút Generate Image, ảnh chụp và báo cáo sẽ cho biết giao diện thực tế khác selector nào. Cần kiểm tra trên máy có đăng nhập để xác minh end-to-end.

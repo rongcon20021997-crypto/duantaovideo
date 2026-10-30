@@ -18,15 +18,21 @@ test("patch changes domain and project navigator, idempotently",()=>{
  fs.mkdirSync(browserDir,{recursive:true});
  fs.writeFileSync(path.join(browserDir,"session.js"),
   'const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find((page) => page.url().includes("labs.google")); } // Bundled-Chromium path\nif (!browser) { launchChrome(); }');
- fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } }');
+ fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } async runJob(input) { await this.assertReady(); await this.applySettings(input.job); await this.fillPrompt(input.job.prompt); await this.submit(); } }');
  fs.writeFileSync(path.join(dir,"ui.js"),fixture);
+ fs.writeFileSync(path.join(dir,"locators.js"),[
+ 'export function flowLocators(page) { return {',
+ 'promptBox: page.locator(\'[role="textbox"][contenteditable="true"]\'),',
+ 'submitButton: page.locator("button", { hasText: "Create" }).filter({ hasText: /arrow_forward/ }),',
+ 'settingsButton: page.locator("button").filter({ hasText: /crop_(16_9|9_16|square|portrait|landscape)/ }),',
+ '}; }'].join("\n"));
  fs.writeFileSync(path.join(dir,"characters.js"),
  'await this.page.goto(projectSubUrl(projectId, "characters"), { waitUntil: "domcontentloaded" }); await this.page.goto(projectSubUrl(projectId, ""), { waitUntil: "domcontentloaded" });');
  const cliDir=path.join(temp,"node_modules","@swissmarley","gflow-cli","dist","src");
  fs.writeFileSync(path.join(cliDir,"cli.js"),
  'await session.page.goto(FLOW_URL, { waitUntil: "domcontentloaded" }).catch(() => undefined);');
  try{
-  assert.equal(patchGFlow(temp).changed,5);
+  assert.equal(patchGFlow(temp).changed,6);
   assert.equal(patchGFlow(temp).changed,0);
   const ui=fs.readFileSync(path.join(dir,"ui.js"),"utf8");
   assert.ok(!ui.includes("createControl.click"));
@@ -43,6 +49,10 @@ test("patch changes domain and project navigator, idempotently",()=>{
   assert.ok(cli.includes('process.env.GFLOW_USE_CURRENT_TAB !== "1"'));
   const chars=fs.readFileSync(path.join(dir,"characters.js"),"utf8");
   assert.ok(chars.includes('process.env.GFLOW_USE_CURRENT_TAB !== "1"'));
+  const locators=fs.readFileSync(path.join(dir,"locators.js"),"utf8");
+  assert.ok(locators.includes("Generate Image"));
+  assert.ok(locators.includes("textarea[placeholder]"));
+  assert.ok(page.includes("gflow stage: submitting prompt"));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
 test("navigator patch refuses mismatched upstream instead of silently corrupting library",()=>{
@@ -127,4 +137,23 @@ test("current-tab mode stops on mismatched project without navigating",async()=>
  const page={url:()=>"https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000",
    goto:()=>{throw Error("Unwanted navigation");}};
  await assert.rejects(()=>fn(page,"https://flow.google.com/project/999e4567-e89b-12d3-a456-426614174999"),/không trùng project/);
+});
+
+test("GFlow select image UI supports Generate Image and old Create arrow",()=>{
+ const {patchFlowLocators}=require("../scripts/patch-gflow.cjs");
+ const src=[
+ 'promptBox: page.locator(\'[role="textbox"][contenteditable="true"]\'),',
+ 'submitButton: page.locator("button", { hasText: "Create" }).filter({ hasText: /arrow_forward/ }),',
+ 'settingsButton: page.locator("button").filter({ hasText: /crop_(16_9|9_16|square|portrait|landscape)/ }),'].join("\n");
+ const out=patchFlowLocators(src);
+ assert.match(out,/Generate Image/);
+ assert.match(out,/textarea\[placeholder\]/);
+ assert.equal(patchFlowLocators(out),out);
+});
+test("GFlow job diagnostics marks stages and remains idempotent",()=>{
+ const {patchFlowJobDiagnostics}=require("../scripts/patch-gflow.cjs");
+ const s="await this.assertReady(); await this.applySettings(input.job); await this.fillPrompt(input.job.prompt); await this.submit();";
+ const r=patchFlowJobDiagnostics(s);
+ assert.match(r,/gflow stage: submitting prompt/);
+ assert.equal(patchFlowJobDiagnostics(r),r);
 });

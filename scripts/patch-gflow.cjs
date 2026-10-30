@@ -69,6 +69,39 @@ function patchCharacterKeepCurrentTab(source){
  return source;
 }
 
+
+function patchFlowLocators(source){
+ const lines=source.split("\n");
+ const changes={
+  promptBox:"    promptBox: page.locator('[role=\"textbox\"][contenteditable=\"true\"]:visible, [contenteditable=\"true\"]:visible, textarea[placeholder]:visible, textarea[aria-label]:visible'),",
+  submitButton:"    submitButton: page.getByRole(\"button\", { name: /^(?:Generate Image|Generate|Tạo ảnh)$/i }).or(page.locator(\"button:visible\").filter({ hasText: /(?:arrow_forward\\s*create|create\\s*arrow_forward|generate\\s*image|tạo\\s*ảnh)/i })),",
+  settingsButton:"    settingsButton: page.locator(\"button:visible\").filter({ hasText: /crop_(?:16_9|9_16|square|portrait|landscape)|nano\\s*banana|imagen\\s*4|veo\\s*3/i }),"
+ };
+ for(const [key, replacement] of Object.entries(changes)){
+  const ix=lines.findIndex(line=>line.trimStart().startsWith(key+": page."));
+  if(ix<0)throw Error("Pinned GFlow locators changed: "+key);
+  lines[ix]=replacement;
+ }
+ return lines.join("\n");
+}
+function patchFlowJobDiagnostics(source){
+ // Fail clearly when model or image control is absent, instead of a 15-minute
+ // wait on a button that cannot be found.
+ const changes=[
+  ['await this.assertReady();', 'await this.assertReady();\\n        console.error("gflow stage: project editor ready ("+this.page.url()+")");'],
+  ['await this.applySettings(input.job);', 'console.error("gflow stage: configuring "+input.job.type+" model");\\n        await this.applySettings(input.job);'],
+  ['await this.fillPrompt(input.job.prompt);', 'console.error("gflow stage: filling prompt");\\n        await this.fillPrompt(input.job.prompt);'],
+  ['await this.submit();', 'console.error("gflow stage: submitting prompt");\\n        await this.submit();\\n        console.error("gflow stage: submitted; waiting for image/video result");']
+ ];
+ let next=source;
+ for(const [old,value] of changes){
+  if(next.includes(value.replaceAll("\\n","\n")))continue;
+  if(!next.includes(old))throw Error("Pinned GFlow FlowPage.runJob changed: "+old);
+  next=next.replace(old,value.replaceAll("\\n","\n"));
+ }
+ return next;
+}
+
 function patchGFlow(root=path.resolve(__dirname,"..")){
  const dir=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  let changed=0;
@@ -78,10 +111,16 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    const before=fs.readFileSync(file,"utf8");
    let after=before.split(oldUrl).join(newUrl);
    if(basename==="ui.js") after=replaceNavigation(after);
-   if(basename==="page.js") after=patchFlowOpen(after);
+   if(basename==="page.js") after=patchFlowJobDiagnostics(patchFlowOpen(after));
    if(!after.includes(newUrl))throw new Error("Expected Flow URL not found in "+basename);
    if(after!==before){fs.writeFileSync(file,after,"utf8");changed++;}
  }
+ const locatorsPath=path.join(dir,"locators.js");
+ if(!fs.existsSync(locatorsPath))throw Error("Missing GFlow locators.js");
+ const oldLocators=fs.readFileSync(locatorsPath,"utf8");
+ const newLocators=patchFlowLocators(oldLocators);
+ if(newLocators!==oldLocators){fs.writeFileSync(locatorsPath,newLocators,"utf8");changed++;}
+
  const sessionPath=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","browser","session.js");
  if(!fs.existsSync(sessionPath))throw Error("Missing upstream browser/session.js");
  const prevSession=fs.readFileSync(sessionPath,"utf8");
@@ -96,10 +135,10 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    const previous=fs.readFileSync(file,"utf8"),updated=apply(previous);
    if(updated!==previous){fs.writeFileSync(file,updated,"utf8");changed++;}
  }
- return {changed,modules:modules.length+3,origin:newUrl};
+ return {changed,modules:modules.length+4,origin:newUrl};
 }
 if(require.main===module){
  try{const info=patchGFlow();console.log("GFlow project compatibility: "+info.origin+" ("+info.changed+" modules updated)");}
  catch(error){console.error("GFlow compatibility patch failed: "+error.message);process.exitCode=1;}
 }
-module.exports={patchGFlow,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
+module.exports={patchGFlow,patchFlowLocators,patchFlowJobDiagnostics,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
