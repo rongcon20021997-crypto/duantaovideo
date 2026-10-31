@@ -13,7 +13,8 @@ function scoreUploadControl(item){
  let score=0;
  if(/upload (?:image|photo|media|file)|upload from|browse files|choose files|tải ảnh|tải lên|chọn ảnh/i.test(all))score+=40;
  if(/add (?:image|media|photo|ingredient|reference)|add to prompt|thêm (?:ảnh|hình|media)|ingredient|reference image|attach (?:file|image|media)/i.test(all))score+=35;
- if(/add_2|add_circle|attach_file|add_photo_alternate|photo_library|image_add|upload_file|file_upload|cloud_upload/i.test(icon+" "+text))score+=27;
+ if(/upload_file|file_upload|cloud_upload/i.test(icon+" "+text))score+=60;
+ else if(/add_2|add_circle|attach_file|add_photo_alternate|photo_library|image_add/i.test(icon+" "+text))score+=27;
  if(/\badd\b|\bplus\b|\bupload\b|\battach\b|thêm/i.test(all))score+=9;
  if(item.popup)score+=5;
  if(item.near)score+=10;
