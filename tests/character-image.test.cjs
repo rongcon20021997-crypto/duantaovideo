@@ -1,7 +1,7 @@
 const test=require("node:test");
 const assert=require("node:assert/strict");
 const fs=require("node:fs"),os=require("node:os"),path=require("node:path");
-const {validateFiles,imageCandidates,findProjectPage,imageExtension}=require("../electron/lib/character-image.cjs");
+const {validateFiles,imageCandidates,findProjectPage,imageExtension,openFreshReferencePicker,attachExistingReference}=require("../electron/lib/character-image.cjs");
 const url="https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000";
 test("requires one or two actual reference images",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"reference-test-"));
@@ -43,4 +43,59 @@ test("reference image generator supports a frame prefix and fixes filename click
  assert.match(s,/String\(outputPrefix\|\|"character"\)\+"-"\+id/);
  assert.match(s,/page.getByText\(prefix,\{exact:false\}\)/);
  assert.doesNotMatch(s,/new RegExp\(prefix\.replace/);
+});
+
+test("scene 2 opens reference picker from the composer instead of using Uploads sidebar",async()=>{
+ let composerClicks=0,sidebarClicks=0;
+ const plus={isVisible:async()=>true,click:async()=>{composerClicks++;}};
+ const page={
+  getByRole:(_role,{name})=>{
+   if(!/Thêm thành phần/.test(name.source))throw Error("Unexpected non-composer navigation");
+   return {first:()=>plus};
+  },
+  waitForTimeout:async()=>{},
+  getByText:()=>{sidebarClicks++;throw Error("No media filename should be sought in sidebar");}
+ };
+ const upload={label:"Tải nội dung nghe nhìn lên"};
+ const picker=await openFreshReferencePicker(page,"character-sample-2026.png",()=>{},undefined,{
+   findUpload:async()=>composerClicks===2?upload:null,
+   findFilename:async()=>false,
+   findConfirm:async()=>null
+ });
+ assert.equal(picker.upload,upload);
+ assert.equal(composerClicks,2,"stale scene-1 picker must be reopened once");
+ assert.equal(sidebarClicks,0,"do not navigate to sidebar Uploaded Files");
+});
+test("scene 2 reuses existing reference and explicitly selects it even if prior media was selected",async()=>{
+ let selected=false,attached=false,uploads=0;
+ const confirm={isEnabled:async()=>true,click:async()=>{assert.equal(selected,true);attached=true;}};
+ const page={
+  getByText:prefix=>{
+   assert.match(prefix,/character-sample/);
+   return {first:()=>({isVisible:async()=>true,click:async()=>{selected=true;}})};
+  },
+  evaluate:async()=>attached?["attached-reference-image"]:[],
+  waitForTimeout:async()=>{}
+ };
+ const reused=await attachExistingReference(page,"character-sample-2026.png",[],()=>{},undefined,
+  {upload:{},matching:true,confirm}, {findConfirm:async()=>confirm});
+ assert.equal(reused,true);
+ assert.equal(selected,true);
+ assert.equal(attached,true);
+ assert.equal(uploads,0);
+});
+test("never attach an arbitrary image if requested reference was not found in picker",async()=>{
+ let clicks=0;
+ const page={getByText:()=>{clicks++;throw Error("Should not click unrelated media");}};
+ const reused=await attachExistingReference(page,"character-sample-2026.png",[],()=>{},undefined,
+  {upload:{},matching:false,confirm:{}});
+ assert.equal(reused,false);
+ assert.equal(clicks,0);
+});
+test("multi-scene uploader never navigates to Uploaded Files sidebar",()=>{
+ const src=fs.readFileSync(path.join(__dirname,"..","electron","lib","character-image.cjs"),"utf8");
+ assert.match(src,/openFreshReferencePicker\(page,filepath,log,signal\)/);
+ assert.match(src,/attachExistingReference\(page,filepath,composerBefore,log,signal,picker\)/);
+ assert.doesNotMatch(src,/uploaded\.click\(/);
+ assert.match(src,/Không tự điều hướng sang Tệp tải lên/);
 });

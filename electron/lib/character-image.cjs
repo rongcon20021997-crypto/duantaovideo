@@ -149,8 +149,7 @@ async function attachUploadedReference(page,confirm,composerBefore,log){
 
 async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepath,log,signal,timeoutMs=180000){
  const deadline=Date.now()+timeoutMs;
- let lastNotice=0,selectedSrc=null,triedUploadFilter=false,triedSelectFilename=false;
- const started=Date.now();
+ let lastNotice=0,selectedSrc=null,triedSelectFilename=false;
  const oldCards=earlierCards.map(x=>x.src);
  while(Date.now()<deadline){
   checkStopped(signal);
@@ -185,16 +184,7 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
   }
   const current=await inspectMediaCards(page);
   const newCard=chooseNewMediaCard(current.cards,oldCards);
-  // Flow can leave "Tất cả" on an empty cached view after upload. Switch
-  // once to "Tệp tải lên" (Uploaded files) to refresh the asset collection.
-  if(!newCard&&!triedUploadFilter&&Date.now()-started>16000){
-   triedUploadFilter=true;
-   const uploaded=page.getByRole("button",{name:/tệp tải lên|uploaded files|uploads/i}).first();
-   if(await uploaded.isVisible().catch(()=>false)){
-    await uploaded.click({timeout:5000}).catch(()=>undefined);
-    log("Đã chuyển sang mục Tệp tải lên để tìm ảnh mẫu vừa upload.");
-   }
-  }
+  // Never click the global Uploaded Files sidebar during generation.
   if(newCard){
    if(selectedSrc!==newCard.src){
     log("Đã phát hiện thumbnail ảnh mẫu mới trong hộp media.");
@@ -225,51 +215,89 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
  throw Error("Đã chọn file và xử lý hộp quyền sử dụng, nhưng Google Flow chưa đưa ảnh mẫu vào prompt trong 3 phút. Không gửi lệnh tạo ảnh khi chưa gắn được ảnh mẫu.");
 }
 
+async function openFreshReferencePicker(page,filepath,log,signal,ops={}){
+ // Always anchor on the composer "+" (not the left-hand "Tệp tải lên"
+ // navigation). It may be visible even when the previous scene's image cards
+ // remain on screen.
+ const direct=page.getByRole("button",{name:/^Thêm thành phần vào ô nhập câu lệnh$|^Add (?:ingredient|reference|media|image|to prompt)$/i}).first();
+ let add=await direct.isVisible().catch(()=>false)?direct:await pickUploadTrigger(page,log);
+ if(!add){
+  const box=await visibleOne(page.locator(INPUTS));
+  if(box)await box.hover({timeout:2500}).catch(()=>{});
+  add=await pickUploadTrigger(page,log);
+ }
+ if(!add)throw Error("Không tìm thấy dấu + ở ô nhập prompt để mở bộ chọn ảnh cho cảnh mới.");
+ checkStopped(signal);
+ // After scene 1 Flow sometimes leaves the media overlay open. The first
+ // click then CLOSES that overlay. Probe the actual picker UI and, only if
+ // no picker actions appeared, toggle the composer "+" one final time.
+ for(let opening=0;opening<2;opening++){
+  checkStopped(signal);
+  await add.click({timeout:7000});
+  log(opening?"Bộ chọn ảnh chưa xuất hiện; thử mở lại dấu + tại ô prompt lần cuối.":"Bấm dấu + ở ô prompt để chọn ảnh cho cảnh hiện tại.");
+  for(let n=0;n<16;n++){
+   checkStopped(signal);
+   const upload=await (ops.findUpload||pickPickerUploadButton)(page,()=>{});
+   const matching=await (ops.findFilename||findUploadedFilename)(page,filepath);
+   const confirm=matching?await (ops.findConfirm||findPickerConfirm)(page):null;
+   if(upload||confirm)return {upload,matching,confirm};
+   await page.waitForTimeout(500);
+  }
+ }
+ throw Error("Không tìm thấy bộ chọn ảnh từ dấu + của ô prompt sau 2 lần kiểm tra. Không tự điều hướng sang Tệp tải lên, không tạo ảnh thiếu mẫu.");
+}
+async function attachExistingReference(page,filepath,composerBefore,log,signal,opened,ops={}){
+ // The reference from scene 1 may already exist in Flow's asset collection.
+ // Reuse it only when the exact uploaded filename prefix is visible INSIDE
+ // an opened composer picker. Never select arbitrary generated scene images.
+ if(!opened.upload&&!opened.confirm)return false;
+ if(!opened.matching)return false;
+ checkStopped(signal);
+ // The picker can retain a selected result from scene 1. Explicitly select
+ // the matching reusable reference, even if the confirm button is enabled.
+ const prefix=filenameSearchPrefix(filepath);
+ if(!prefix)return false;
+ const label=page.getByText(prefix,{exact:false}).first();
+ if(!await label.isVisible().catch(()=>false))return false;
+ log("Đã có ảnh mẫu trong Flow: "+path.basename(filepath)+". Chọn lại đúng ảnh mẫu cho cảnh tiếp theo.");
+ await label.click({timeout:5000});
+ let confirm=null;
+ for(let n=0;n<14;n++){
+  confirm=await (ops.findConfirm||findPickerConfirm)(page);
+  if(confirm&&await confirm.isEnabled().catch(()=>false))break;
+  await page.waitForTimeout(400);
+ }
+ if(!confirm||!(await confirm.isEnabled().catch(()=>false)))return false;
+ log("Dùng lại ảnh mẫu đã có trên Flow cho cảnh tiếp theo.");
+ await attachUploadedReference(page,confirm,composerBefore,log);
+ return true;
+}
 async function uploadReference(page,filepath,log,signal){
  checkStopped(signal);
  const composerBefore=await composerReferenceIds(page);
- let add=await pickUploadTrigger(page,log);
- if(!add&&!(await page.locator(FILES).count())){
-   const box=await visibleOne(page.locator(INPUTS));
-   if(box){
-     await box.hover({timeout:2500}).catch(()=>undefined);
-     add=await pickUploadTrigger(page,log);
+ // Reopen from the prompt every time: after a generation, Flow may have
+ // navigated its asset sidebar or left the previous image results visible.
+ const picker=await openFreshReferencePicker(page,filepath,log,signal);
+ if(await attachExistingReference(page,filepath,composerBefore,log,signal,picker))return;
+ let upload=picker.upload||await pickPickerUploadButton(page,log);
+ if(!upload){
+   // Assets can arrive while the overlay loads. Do not mistake the main
+   // "Tệp tải lên" page for the upload picker or click it as a fallback.
+   for(let n=0;n<8&&!upload;n++){
+    await page.waitForTimeout(450);
+    upload=await pickPickerUploadButton(page,()=>{});
    }
  }
- if(!add&&!(await page.locator(FILES).count()))throw Error("Không tìm thấy nút thêm ảnh cạnh ô prompt. Danh sách nút đã ghi trong Nhật ký và báo cáo chẩn đoán.");
-
+ if(!upload)throw Error("Bộ chọn ảnh không có nút 'Tải nội dung nghe nhìn lên' và không tìm thấy đúng ảnh mẫu để dùng lại. Kiểm tra ảnh chẩn đoán. Không bấm Tệp tải lên ở sidebar.");
  const beforeMedia=await inspectMediaCards(page);
- log("Đưa ảnh mẫu vào Google Flow: "+path.basename(filepath));
- const uploadType=add?await invokeUpload(page,add,filepath,{log}):"direct-input";
- if(uploadType==="direct-input"){
-   await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
-   log("Đã nhập file qua input có sẵn trong Flow.");
- }
- if(uploadType==="picker"){
-   // The user's real Google Flow UI shows this exact footer action (VN):
-   // "upload Tải nội dung nghe nhìn lên". Do NOT click "Tệp tải lên",
-   // which is only the asset-library filter.
-   const upload=await pickPickerUploadButton(page,log);
-   if(!upload){
-     const fileinput=page.locator(FILES).last();
-     if(await fileinput.count()){
-       await fileinput.setInputFiles(filepath,{timeout:10000});
-       log("Đã upload ảnh bằng input file trong cửa sổ media.");
-     }else throw Error("Hộp media đang mở nhưng không tìm thấy mục 'Tải nội dung nghe nhìn lên'.");
-   }else{
-     log("Đang bấm Tải nội dung nghe nhìn lên để chọn ảnh trên máy.");
-     const actual=await invokeUpload(page,upload,filepath,{finalAction:true,log});
-     if(actual==="picker")throw Error("Đã bấm 'Tải nội dung nghe nhìn lên' nhưng Chrome không phát sinh filechooser hay input[type=file]. Kiểm tra ảnh và báo cáo DOM trong diagnostics.");
-   }
- }
- // Uploading a real image can prompt a rights attestation. Never click
- // "Tôi đồng ý" automatically: the user must decide. Remain on this tab
- // and RESUME when the user dismisses the dialog.
+ log("Tải ảnh mẫu chưa có vào Google Flow: "+path.basename(filepath));
+ const status=await invokeUpload(page,upload,filepath,{finalAction:true,log});
+ if(status==="picker")throw Error("Đã bấm Tải nội dung nghe nhìn lên nhưng Flow không hiển thị trình chọn file/input. Không gửi lệnh tạo.");
  await waitForRightsDecision(page,log,signal);
- log("Đang chờ ảnh đã tải lên được thêm vào câu lệnh...");
+ log("Chờ ảnh mẫu đã upload được gắn vào prompt...");
  await waitForReferenceInPicker(page,beforeMedia.cards,composerBefore,filepath,log,signal);
-
 }
+
 async function fillPrompt(page,prompt){
  const box=await visibleOne(page.locator(INPUTS));
  if(!box)throw Error("Không tìm thấy ô prompt.");
@@ -406,4 +434,4 @@ async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,
   throw Error(String(e?.message||e)+(shot?"\nẢnh chẩn đoán: "+shot:""));
  }finally{await browser.close().catch(()=>{});}
 }
-module.exports={runCharacterImage,validateFiles,imageCandidates,findProjectPage,imageExtension};
+module.exports={runCharacterImage,validateFiles,imageCandidates,findProjectPage,imageExtension,openFreshReferencePicker,attachExistingReference};
