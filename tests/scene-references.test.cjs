@@ -11,7 +11,7 @@ test("storyboard image prefers generated character image instead of original pho
 test("storyboard images use up to two original photos if no generated portrait exists",()=>{
  const ws={character:{referenceImages:["/refs/a.jpg","/refs/b.jpg","/refs/c.jpg"]}};
  const x=resolveSceneReferences(ws,{exists:()=>true});
- assert.deepEqual(x.files,["/refs/a.jpg","/refs/b.jpg"].map(sep.resolve));
+ assert.deepEqual(x.files,["/refs/a.jpg","/refs/b.jpg"].map(p=>sep.resolve(p)));
  assert.equal(x.source,"original-references");
 });
 test("missing generated image falls back to chosen original",()=>{
