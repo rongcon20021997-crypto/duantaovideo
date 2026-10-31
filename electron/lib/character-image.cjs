@@ -7,13 +7,14 @@ const path=require("node:path");
 const {createRequire}=require("node:module");
 const {projectUrl}=require("./project.cjs");
 const {pickUploadTrigger,pickPickerUploadButton,examineUploadControls}=require("./flow-upload-finder.cjs");
+const {waitForRightsDecision,isRightsVisible,inspectMediaCards,chooseNewMediaCard,selectMediaCard,findPickerConfirm}=require("./flow-rights-upload.cjs");
 
 const INPUTS='[role="textbox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea:visible';
 const FILES='input[type="file"]';
 const UPLOAD=/tải nội dung nghe nhìn lên|upload (image|media|file)|upload from|tải (ảnh|tệp|lên)|chọn tệp|choose (file|image)/i;
 const ADD=/add image|add media|thêm ảnh|thêm hình|add_2/i;
 const CONFIRM=/add to prompt|use (image|media|selected)|thêm vào (?:ô nhập )?câu lệnh|thêm vào lời nhắc|thêm vào prompt|add selected/i;
-const CREATE=/generate image|tạo ảnh|tạo hình/i;
+const CREATE=/generate image|tạo ảnh|tạo hình|bắt đầu tạo|start generation/i;
 const MODEL=/nano banana|imagen|veo/i;
 const PREFERRED_TIMEOUT=360000;
 
@@ -107,9 +108,82 @@ async function invokeUpload(page,button,filepath,{finalAction=false,log=()=>{}}=
  return "picker";
 }
 
+
+async function composerReferenceIds(page){
+ return page.evaluate(()=>{
+  const box=[...document.querySelectorAll('[role="textbox"][contenteditable="true"],textarea,[contenteditable="true"]')]
+   .find(el=>{const r=el.getBoundingClientRect();return r.width>10&&r.height>10;});
+  if(!box)return [];
+  const b=box.getBoundingClientRect();
+  const nearby=el=>{
+    const r=el.getBoundingClientRect();
+    return r.width>16&&r.height>16&&r.top>=b.top-120&&r.bottom<=b.bottom+90&&
+      r.right>=b.left-15&&r.left<=b.right+15;
+  };
+  const images=[...document.querySelectorAll("img")].filter(nearby)
+    .map(img=>img.currentSrc||img.src).filter(Boolean);
+  const backgrounds=[...document.querySelectorAll('[style*="background"]')].filter(nearby)
+    .map(el=>getComputedStyle(el).backgroundImage).filter(v=>v&&v!=="none");
+  return [...new Set([...images,...backgrounds])];
+ });
+}
+async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,signal,timeoutMs=180000){
+ const deadline=Date.now()+timeoutMs;
+ let lastNotice=0,selectedSrc=null;
+ const oldCards=earlierCards.map(x=>x.src);
+ while(Date.now()<deadline){
+  checkStopped(signal);
+  const failure=page.getByText(/không thể tải lên|tải lên không thành công|upload failed|could not upload|file upload failed/i).first();
+  if(await failure.isVisible().catch(()=>false))throw Error("Google Flow thông báo tải ảnh mẫu thất bại. Kiểm tra tệp và thông báo trên màn hình.");
+  if(await isRightsVisible(page))await waitForRightsDecision(page,log,signal);
+  const current=await inspectMediaCards(page);
+  const newCard=chooseNewMediaCard(current.cards,oldCards);
+  if(newCard){
+   if(selectedSrc!==newCard.src){
+    log("Đã phát hiện thumbnail ảnh mẫu mới trong hộp media.");
+    if(!newCard.selected)await selectMediaCard(page,newCard);
+    selectedSrc=newCard.src;
+    log("Đã chọn ảnh mẫu tải lên. Đang tìm nút Thêm vào câu lệnh.");
+   }
+   const confirm=await findPickerConfirm(page);
+   if(confirm&&await confirm.isEnabled().catch(()=>false)){
+    log("Bấm Thêm vào câu lệnh để gắn ảnh mẫu vào prompt.");
+    await confirm.click({timeout:8000});
+    const after=await composerReferenceIds(page);
+    if(after.some(src=>!composerBefore.includes(src))){
+     log("Đã xác nhận ảnh mẫu hiện trong ô prompt.");
+     return;
+    }
+    // Flow can render the thumbnail asynchronously after the picker closes.
+    for(let attempt=0;attempt<12;attempt++){
+     await page.waitForTimeout(500);
+     const refs=await composerReferenceIds(page);
+     if(refs.some(src=>!composerBefore.includes(src))){log("Ảnh mẫu đã gắn vào prompt.");return;}
+    }
+    // Confirm was actionable, but no attached image can be verified.
+    throw Error("Đã bấm Thêm vào câu lệnh nhưng không thấy ảnh mẫu xuất hiện trong ô prompt.");
+   }
+  }
+  const after=await composerReferenceIds(page);
+  if(after.some(src=>!composerBefore.includes(src))){
+   log("Google Flow đã tự gắn ảnh mẫu vào prompt.");
+   return;
+  }
+  // Do not silently treat an image existing in the media library as an
+  // image already attached to the generation prompt.
+  if(Date.now()-lastNotice>=12000){
+   lastNotice=Date.now();
+   log(newCard?"Đã có ảnh trong thư viện, đang chờ nút Thêm vào câu lệnh...":
+    "Đang chờ Google Flow xử lý ảnh mẫu và hiển thị trong hộp media...");
+  }
+  await page.waitForTimeout(1000);
+ }
+ throw Error("Đã chọn file và xử lý hộp quyền sử dụng, nhưng Google Flow chưa đưa ảnh mẫu vào prompt trong 3 phút. Không gửi lệnh tạo ảnh khi chưa gắn được ảnh mẫu.");
+}
+
 async function uploadReference(page,filepath,log,signal){
  checkStopped(signal);
- const starting=await snapshot(page);
+ const composerBefore=await composerReferenceIds(page);
  let add=await pickUploadTrigger(page,log);
  if(!add&&!(await page.locator(FILES).count())){
    const box=await visibleOne(page.locator(INPUTS));
@@ -120,6 +194,7 @@ async function uploadReference(page,filepath,log,signal){
  }
  if(!add&&!(await page.locator(FILES).count()))throw Error("Không tìm thấy nút thêm ảnh cạnh ô prompt. Danh sách nút đã ghi trong Nhật ký và báo cáo chẩn đoán.");
 
+ const beforeMedia=await inspectMediaCards(page);
  log("Đưa ảnh mẫu vào Google Flow: "+path.basename(filepath));
  const uploadType=add?await invokeUpload(page,add,filepath,{log}):"direct-input";
  if(uploadType==="direct-input"){
@@ -143,28 +218,13 @@ async function uploadReference(page,filepath,log,signal){
      if(actual==="picker")throw Error("Đã bấm 'Tải nội dung nghe nhìn lên' nhưng Chrome không phát sinh filechooser hay input[type=file]. Kiểm tra ảnh và báo cáo DOM trong diagnostics.");
    }
  }
- await page.waitForTimeout(1000);
- // New uploads are often selected automatically, and the picker needs confirmation.
- let confirmed=false;
- for(let attempt=0;attempt<40;attempt++){
-   checkStopped(signal);
-   const dialog=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]'));
-   const candidate=dialog?await visibleOne(dialog.getByRole("button",{name:CONFIRM}).or(dialog.getByText(CONFIRM))):null;
-   if(candidate){
-     if(await candidate.isEnabled().catch(()=>true)){
-       await candidate.click({timeout:8000});
-       confirmed=true;break;
-     }
-   } else if(!dialog)break;
-   await page.waitForTimeout(600);
- }
- // If no dialog was used, require the uploaded media to appear on screen.
- const after=await snapshot(page);
- const newMedia=after.some(src=>!starting.includes(src));
- const dialogStillOpen=Boolean(await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]')));
- if(dialogStillOpen&&!confirmed)throw Error("Ảnh mẫu chưa được xác nhận Add to Prompt trong cửa sổ chọn media.");
- if(!confirmed&&!newMedia)throw Error("Đã upload nhưng không xác nhận được ảnh mẫu đã gắn vào prompt. Dừng trước khi tạo để tránh ảnh sai nhân vật.");
- log("Đã thêm ảnh mẫu vào prompt"+(confirmed?" (Add to Prompt)":"")+".");
+ // Uploading a real image can prompt a rights attestation. Never click
+ // "Tôi đồng ý" automatically: the user must decide. Remain on this tab
+ // and RESUME when the user dismisses the dialog.
+ await waitForRightsDecision(page,log,signal);
+ log("Đang chờ ảnh đã tải lên được thêm vào câu lệnh...");
+ await waitForReferenceInPicker(page,beforeMedia.cards,composerBefore,log,signal);
+
 }
 async function fillPrompt(page,prompt){
  const box=await visibleOne(page.locator(INPUTS));
@@ -184,7 +244,7 @@ async function submit(page,log){
  const preferred=await visibleOne(page.getByRole("button",{name:CREATE}));
  let btn=preferred;
  if(!btn){
-  btn=await visibleOne(page.locator("button").filter({hasText:/arrow_forward\s*create|create\s*arrow_forward/i}));
+  btn=await visibleOne(page.locator("button").filter({hasText:/arrow_forward\s*create|create\s*arrow_forward|^arrow_forward$/i}));
  }
  if(!btn)throw Error("Không tìm thấy nút Generate Image trên Google Flow. Đã dừng trước khi gửi.");
  if(!await btn.isEnabled())throw Error("Nút Generate Image đang bị vô hiệu. Có thể ảnh mẫu chưa tải xong hoặc nội dung prompt không hợp lệ.");
