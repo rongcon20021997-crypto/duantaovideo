@@ -141,3 +141,13 @@ Khi tạo ảnh hoặc video bằng GFlow CLI, ứng dụng sử dụng tab Goog
 - Thiếu ảnh mẫu khi tùy chọn bật sẽ **báo lỗi trước khi gửi lệnh** thay vì âm thầm tạo ảnh chỉ từ prompt. Muốn ảnh không có mẫu, tắt tùy chọn trong **Kịch bản**.
 - Ảnh cảnh được lưu làm keyframe; bước video vẫn dùng `--start-frame` để yêu cầu Veo tham chiếu ảnh đã tạo. Luồng upload khung hình đầu của video là phần gflow-cli riêng, vẫn cần kiểm tra thực tế với giao diện tài khoản.
 - Upload ảnh trên Flow có thể yêu cầu xác nhận quyền sử dụng. Hãy tự đọc và chấp nhận/hủy trong Chrome; app sẽ không tự click các xác nhận này.
+
+## Tái sử dụng một ảnh mẫu cho toàn bộ 6 cảnh
+
+DuAnTaoVideo lưu một **chỉ mục upload ảnh mẫu theo project Google Flow và SHA-256 của file** sau khi đã xác minh ảnh thực sự được gắn vào prompt. Chỉ mục được lưu cục bộ tại `<outputDir>/.duantaovideo-flow-references.json`; không lưu cookie, token hay URL ảnh có chữ ký. Nhờ đó:
+
+- Cảnh 1: tải ảnh mẫu một lần, chọn và gắn vào prompt, rồi tạo ảnh.
+- Cảnh 2–6: mở dấu cộng ở ô prompt, tìm đúng ảnh đã tải trong bộ chọn media, chọn và gắn lại cho prompt riêng của mỗi cảnh. **Không upload thêm bản sao.**
+- Nếu file mẫu thay đổi nội dung hoặc mở project khác, app coi đó là tham chiếu khác.
+- Nếu Flow xóa ảnh mẫu khỏi thư viện hoặc không thể tìm thấy ảnh đã ghi nhớ, app báo rõ và **không tự upload lại 5–6 lần**, tránh trùng lặp và gắn nhầm ảnh cảnh trước.
+- Nếu ảnh cũ vẫn còn trên Flow nhưng app không nhận ra, cần kiểm tra danh sách và ảnh chẩn đoán của bộ chọn media; không nên sửa/xóa index trừ khi bạn muốn upload lại từ đầu.

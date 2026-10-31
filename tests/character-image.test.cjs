@@ -1,7 +1,7 @@
 const test=require("node:test");
 const assert=require("node:assert/strict");
 const fs=require("node:fs"),os=require("node:os"),path=require("node:path");
-const {validateFiles,imageCandidates,findProjectPage,imageExtension,openFreshReferencePicker,attachExistingReference}=require("../electron/lib/character-image.cjs");
+const {validateFiles,imageCandidates,findProjectPage,imageExtension,openFreshReferencePicker,attachExistingReference,uploadReference,showUploadedAssetsInsidePicker}=require("../electron/lib/character-image.cjs");
 const url="https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000";
 test("requires one or two actual reference images",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"reference-test-"));
@@ -94,8 +94,72 @@ test("never attach an arbitrary image if requested reference was not found in pi
 });
 test("multi-scene uploader never navigates to Uploaded Files sidebar",()=>{
  const src=fs.readFileSync(path.join(__dirname,"..","electron","lib","character-image.cjs"),"utf8");
- assert.match(src,/openFreshReferencePicker\(page,filepath,log,signal\)/);
- assert.match(src,/attachExistingReference\(page,filepath,composerBefore,log,signal,picker\)/);
+ assert.match(src,/ops\.openPicker\|\|openFreshReferencePicker/);
+ assert.match(src,/ops\.attachExisting\|\|attachExistingReference/);
  assert.doesNotMatch(src,/uploaded\.click\(/);
  assert.match(src,/Không tự điều hướng sang Tệp tải lên/);
+});
+
+test("six consecutive storyboard scenes reuse one uploaded image and never upload again",async()=>{
+ const cache=require("../electron/lib/flow-reference-cache.cjs");
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"reuse-scenes-"));
+ try{
+  const reference=path.join(dir,"generated-character.png");
+  fs.writeFileSync(reference,Buffer.from("fixed character reference for 6 scenes"));
+  cache.rememberReference(url,reference,dir,"blob:shared-character-thumbnail");
+  let attachCount=0,uploadCount=0,selected=[];
+  const page={url:()=>url,waitForTimeout:async()=>{}};
+  for(let scene=1;scene<=6;scene++){
+   let attached=false;
+   const ops={
+    composerRefs:async()=>attached?["blob:shared-character-thumbnail"]:[],
+    openPicker:async()=>({upload:{click:()=>{uploadCount++;}},matching:false}),
+    findFilename:async()=>true,
+    findConfirm:async()=>({isEnabled:async()=>true}),
+    attachExisting:async(_page,file,_old,_log,_signal,picker,{cached})=>{
+     assert.equal(file,reference);
+     assert.ok(cached,"must have cached upload");
+     assert.equal(cached.hash,cache.fileFingerprint(reference).hash);
+     assert.equal(picker.matching,true);
+     attached=true;attachCount++;selected.push(scene);
+     return true;
+    }
+   };
+   await uploadReference(page,reference,()=>{},undefined,dir,ops);
+  }
+  assert.equal(attachCount,6);
+  assert.deepEqual(selected,[1,2,3,4,5,6]);
+  assert.equal(uploadCount,0,"must not reupload photo for scenes 2–6");
+  assert.equal(cache.getReference(url,reference,dir).from,"session");
+ }finally{cache.clearMemory();fs.rmSync(dir,{force:true,recursive:true});}
+});
+test("missing cached asset stops rather than re-uploading a duplicate",async()=>{
+ const cache=require("../electron/lib/flow-reference-cache.cjs");
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"missing-asset-"));
+ try{
+  const reference=path.join(dir,"sample.png");fs.writeFileSync(reference,"same file");
+  cache.rememberReference(url,reference,dir);
+  let uploadCount=0;
+  const page={url:()=>url,waitForTimeout:async()=>{},evaluate:async()=>false};
+  const ops={
+   composerRefs:async()=>[],
+   openPicker:async()=>({upload:{click:()=>{uploadCount++;}},matching:false}),
+   findFilename:async()=>false,
+   attachExisting:async()=>false
+  };
+  await assert.rejects(()=>uploadReference(page,reference,()=>{},undefined,dir,ops),/Không upload trùng/);
+  assert.equal(uploadCount,0);
+ }finally{cache.clearMemory();fs.rmSync(dir,{force:true,recursive:true});}
+});
+test("Uploaded Files filter is clicked only when found inside the picker, never on project sidebar",async()=>{
+ let clicked=false;
+ const page={
+  evaluate:async()=>true,
+  locator:selector=>{
+   assert.equal(selector,'[data-gflow-picker-uploads="1"]');
+   return {first:()=>({click:async()=>{clicked=true;}})};
+  }
+ };
+ assert.equal(await showUploadedAssetsInsidePicker(page,()=>{}),true);
+ assert.equal(clicked,true);
 });
