@@ -120,9 +120,9 @@ async function composerReferenceIds(page){
     return r.width>16&&r.height>16&&r.top>=b.top-120&&r.bottom<=b.bottom+90&&
       r.right>=b.left-15&&r.left<=b.right+15;
   };
-  const images=[...document.querySelectorAll("img")].filter(nearby)
+  const images=[...document.querySelectorAll("img")].filter(img=>!img.closest('[role="dialog"],[aria-modal="true"]')&&nearby(img))
     .map(img=>img.currentSrc||img.src).filter(Boolean);
-  const backgrounds=[...document.querySelectorAll('[style*="background"]')].filter(nearby)
+  const backgrounds=[...document.querySelectorAll('[style*="background"]')].filter(el=>!el.closest('[role="dialog"],[aria-modal="true"]')&&nearby(el))
     .map(el=>getComputedStyle(el).backgroundImage).filter(v=>v&&v!=="none");
   return [...new Set([...images,...backgrounds])];
  });
