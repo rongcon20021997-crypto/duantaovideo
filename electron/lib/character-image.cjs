@@ -7,7 +7,7 @@ const path=require("node:path");
 const {createRequire}=require("node:module");
 const {projectUrl}=require("./project.cjs");
 const {pickUploadTrigger,pickPickerUploadButton,examineUploadControls}=require("./flow-upload-finder.cjs");
-const {waitForRightsDecision,isRightsVisible,inspectMediaCards,chooseNewMediaCard,selectMediaCard,findPickerConfirm}=require("./flow-rights-upload.cjs");
+const {waitForRightsDecision,isRightsVisible,inspectMediaCards,chooseNewMediaCard,selectMediaCard,findPickerConfirm,findUploadedFilename,filenameSearchPrefix}=require("./flow-rights-upload.cjs");
 
 const INPUTS='[role="textbox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea:visible';
 const FILES='input[type="file"]';
@@ -127,9 +127,29 @@ async function composerReferenceIds(page){
   return [...new Set([...images,...backgrounds])];
  });
 }
-async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,signal,timeoutMs=180000){
+async function verifyReferenceAttachment(page,composerBefore,log){
+ // The media library image alone is NOT enough; only continue once the prompt
+ // shows a newly attached reference after clicking the Flow footer button.
+ for(let attempt=0;attempt<30;attempt++){
+  const after=await composerReferenceIds(page);
+  if(after.some(src=>!composerBefore.includes(src))){
+   log("Ảnh mẫu đã được gắn vào ô prompt. Tiếp tục nhập câu lệnh trong app.");
+   return true;
+  }
+  await page.waitForTimeout(500);
+ }
+ return false;
+}
+async function attachUploadedReference(page,confirm,composerBefore,log){
+ log("Ảnh mẫu đã sẵn sàng. Bấm 'Thêm vào câu lệnh'.");
+ await confirm.click({timeout:8000});
+ const verified=await verifyReferenceAttachment(page,composerBefore,log);
+ if(!verified)throw Error("Đã bấm Thêm vào câu lệnh nhưng chưa xác nhận được ảnh mẫu trong ô prompt. Chưa gửi lệnh tạo.");
+}
+
+async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepath,log,signal,timeoutMs=180000){
  const deadline=Date.now()+timeoutMs;
- let lastNotice=0,selectedSrc=null,triedUploadFilter=false;
+ let lastNotice=0,selectedSrc=null,triedUploadFilter=false,triedSelectFilename=false;
  const started=Date.now();
  const oldCards=earlierCards.map(x=>x.src);
  while(Date.now()<deadline){
@@ -137,6 +157,33 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,sig
   const failure=page.getByText(/không thể tải lên|tải lên không thành công|upload failed|could not upload|file upload failed/i).first();
   if(await failure.isVisible().catch(()=>false))throw Error("Google Flow thông báo tải ảnh mẫu thất bại. Kiểm tra tệp và thông báo trên màn hình.");
   if(await isRightsVisible(page))await waitForRightsDecision(page,log,signal);
+  // Real observed Flow UI: the asset row shows the uploaded filename and
+  // the white "Thêm vào câu lệnh" button is enabled, but the overlay lacks
+  // role=dialog and thus inspectMediaCards() returns an empty collection.
+  // Match THIS uploaded filename before trusting the confirm action.
+  const uploadNameVisible=await findUploadedFilename(page,filepath);
+  if(uploadNameVisible){
+   const confirm=await findPickerConfirm(page);
+   if(confirm){
+    if(await confirm.isEnabled().catch(()=>false)){
+     log("Đã nhận diện đúng ảnh mẫu "+filenameSearchPrefix(filepath)+" trong hộp chọn media.");
+     await attachUploadedReference(page,confirm,composerBefore,log);
+     return;
+    }
+    if(!triedSelectFilename){
+     triedSelectFilename=true;
+     // Uploaded asset is visible but not selected; click its exact label
+     // using a DOM-based locator, not a screen coordinate.
+     const prefix=filenameSearchPrefix(filepath);
+     const re=new RegExp(prefix.replace(/[|\\{}()[\]^$+*?.]/g,"\\  const current=await inspectMediaCards(page);"),"i");
+     const asset=page.getByText(re).first();
+     if(await asset.isVisible().catch(()=>false)){
+      log("Ảnh mẫu đã lên thư viện, đang chọn theo tên tệp.");
+      await asset.click({timeout:5000}).catch(()=>undefined);
+     }
+    }
+   }
+  }
   const current=await inspectMediaCards(page);
   const newCard=chooseNewMediaCard(current.cards,oldCards);
   // Flow can leave "Tất cả" on an empty cached view after upload. Switch
@@ -158,21 +205,8 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,sig
    }
    const confirm=await findPickerConfirm(page);
    if(confirm&&await confirm.isEnabled().catch(()=>false)){
-    log("Bấm Thêm vào câu lệnh để gắn ảnh mẫu vào prompt.");
-    await confirm.click({timeout:8000});
-    const after=await composerReferenceIds(page);
-    if(after.some(src=>!composerBefore.includes(src))){
-     log("Đã xác nhận ảnh mẫu hiện trong ô prompt.");
-     return;
-    }
-    // Flow can render the thumbnail asynchronously after the picker closes.
-    for(let attempt=0;attempt<12;attempt++){
-     await page.waitForTimeout(500);
-     const refs=await composerReferenceIds(page);
-     if(refs.some(src=>!composerBefore.includes(src))){log("Ảnh mẫu đã gắn vào prompt.");return;}
-    }
-    // Confirm was actionable, but no attached image can be verified.
-    throw Error("Đã bấm Thêm vào câu lệnh nhưng không thấy ảnh mẫu xuất hiện trong ô prompt.");
+    await attachUploadedReference(page,confirm,composerBefore,log);
+    return;
    }
   }
   const after=await composerReferenceIds(page);
@@ -234,7 +268,7 @@ async function uploadReference(page,filepath,log,signal){
  // and RESUME when the user dismisses the dialog.
  await waitForRightsDecision(page,log,signal);
  log("Đang chờ ảnh đã tải lên được thêm vào câu lệnh...");
- await waitForReferenceInPicker(page,beforeMedia.cards,composerBefore,log,signal);
+ await waitForReferenceInPicker(page,beforeMedia.cards,composerBefore,filepath,log,signal);
 
 }
 async function fillPrompt(page,prompt){
@@ -353,8 +387,14 @@ async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,
   await chooseImageMode(page,log);
   for(const file of files)await uploadReference(page,file,log,signal);
   checkStopped(signal);
-  log("Nhập prompt tạo nhân vật.");
+  log("Nhập prompt tạo nhân vật từ nội dung đã viết trong app.");
+  const attachedBefore=await composerReferenceIds(page);
   await fillPrompt(page,prompt.trim());
+  const attachedAfter=await composerReferenceIds(page);
+  if(attachedBefore.length&&!attachedBefore.every(src=>attachedAfter.includes(src))){
+   throw Error("Nhập prompt làm mất ảnh tham chiếu trong ô câu lệnh. Đã dừng trước khi bấm Tạo.");
+  }
+  log("Đã nhập câu lệnh nhân vật lấy từ ứng dụng vào Google Flow.");
   const before=await snapshot(page); // after reference uploads; results must be new
   checkStopped(signal);
   await submit(page,log);

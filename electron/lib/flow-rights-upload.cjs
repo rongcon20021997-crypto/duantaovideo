@@ -77,7 +77,26 @@ async function selectMediaCard(page,newCard){
  }
 }
 
+function filenameSearchPrefix(filepath){
+ const name=require("node:path").basename(String(filepath||""));
+ // Flow truncates long filenames visually; the beginning remains available.
+ return name.length>=8?name.slice(0,Math.min(19,name.length)):"";
+}
+function escapeRegExp(text){
+ return text.replace(/[|\\{}()[\]^$+*?.]/g,"\\$&");
+}
+async function findUploadedFilename(page,filepath){
+ const prefix=filenameSearchPrefix(filepath);
+ if(!prefix)return false;
+ return page.getByText(new RegExp(escapeRegExp(prefix),"i")).first().isVisible().catch(()=>false);
+}
 async function findPickerConfirm(page){
+ // Flow media overlay can lack role=dialog entirely, so do not scope
+ // button detection only to an ARIA dialog.
+ const direct=page.getByRole("button",{name:PICKER_CONFIRM}).first();
+ if(await direct.isVisible().catch(()=>false))return direct;
+ const generic=page.locator('button,[role="button"]').filter({hasText:PICKER_CONFIRM}).first();
+ if(await generic.isVisible().catch(()=>false))return generic;
  const dialogs=page.locator('[role="dialog"],[aria-modal="true"]');
  const count=await dialogs.count();
  for(let i=count-1;i>=0;i--){
@@ -85,10 +104,9 @@ async function findPickerConfirm(page){
   if(!await d.isVisible().catch(()=>false))continue;
   const exact=d.getByRole("button",{name:PICKER_CONFIRM}).first();
   if(await exact.isVisible().catch(()=>false))return exact;
-  const text=d.locator("button").filter({hasText:PICKER_CONFIRM}).first();
-  if(await text.isVisible().catch(()=>false))return text;
  }
  return null;
 }
+
 module.exports={RIGHTS,YES,NO,PICKER_CONFIRM,isRightsVisible,waitForRightsDecision,
- chooseNewMediaCard,inspectMediaCards,selectMediaCard,findPickerConfirm};
+ chooseNewMediaCard,inspectMediaCards,selectMediaCard,findPickerConfirm,filenameSearchPrefix,findUploadedFilename};

@@ -1,6 +1,6 @@
 const test=require("node:test");
 const assert=require("node:assert/strict");
-const {waitForRightsDecision,chooseNewMediaCard,PICKER_CONFIRM,RIGHTS}=require("../electron/lib/flow-rights-upload.cjs");
+const {waitForRightsDecision,chooseNewMediaCard,PICKER_CONFIRM,RIGHTS,filenameSearchPrefix,findUploadedFilename,findPickerConfirm}=require("../electron/lib/flow-rights-upload.cjs");
 test("Flow Vietnamese image rights modal is recognized",()=>{
  assert.match("Quyền sử dụng hình ảnh này",RIGHTS);
  assert.match("Thêm vào câu lệnh",PICKER_CONFIRM);
@@ -30,4 +30,30 @@ test("only newly uploaded media tile is selected",()=>{
  const cards=[{src:old,visible:true,index:0},{src:newSrc,visible:true,index:1}];
  assert.deepEqual(chooseNewMediaCard(cards,[old]),cards[1]);
  assert.equal(chooseNewMediaCard(cards,[old,newSrc]),null);
+});
+
+test("asset label matcher uses the actual uploaded filename prefix in Vietnamese Flow",async()=>{
+ const name="Đầu_bếp_Nam.jpg_20261017150613.jpg";
+ assert.equal(filenameSearchPrefix(name),"Đầu_bếp_Nam.jpg_202");
+ let regex;
+ const page={getByText:re=>{regex=re;return {first:()=>({isVisible:async()=>true})}}};
+ assert.equal(await findUploadedFilename(page,name),true);
+ assert.ok(regex.test("Đầu_bếp_Nam.jpg_2026..."));
+ assert.equal(filenameSearchPrefix("a.jpg"),"");
+});
+test("finds Thêm vào câu lệnh in Flow overlay even without role=dialog",async()=>{
+ let scopeHit=false;
+ const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>{scopeHit=true;}};
+ const page={
+  getByRole:()=>({first:()=>button}),
+  locator:()=>({filter:()=>({first:()=>button})})
+ };
+ const found=await findPickerConfirm(page);
+ assert.equal(found,button);
+ await found.click();
+ assert.equal(scopeHit,true);
+});
+test("does not confuse the media-picker title with the confirm action",()=>{
+ assert.equal(PICKER_CONFIRM.test("Tải nội dung nghe nhìn lên"),false);
+ assert.equal(PICKER_CONFIRM.test("Thêm vào câu lệnh"),true);
 });
