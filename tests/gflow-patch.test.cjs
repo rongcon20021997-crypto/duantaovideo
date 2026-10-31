@@ -18,7 +18,7 @@ test("patch changes domain and project navigator, idempotently",()=>{
  fs.mkdirSync(browserDir,{recursive:true});
  fs.writeFileSync(path.join(browserDir,"session.js"),
   'const existingPort = running.length > 0 ? await readDevToolsPort(profileDir) : undefined; function pickFlowPage(context) { return context.pages().find((page) => page.url().includes("labs.google")); } // Bundled-Chromium path\nif (!browser) { launchChrome(); }');
- fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } async runJob(input) { await this.assertReady(); await this.applySettings(input.job); await this.fillPrompt(input.job.prompt); await this.submit(); } }');
+ fs.writeFileSync(path.join(dir,"page.js"),'const url="https://labs.google/fx/tools/flow"; class FlowPage { async open() { await this.page.goto(this.flowUrl, { waitUntil: "domcontentloaded" }); } async runJob(input) { await this.assertReady(); await this.applySettings(input.job); await this.fillPrompt(input.job.prompt); await this.submit(); } async submit() { const submit = flowLocators(this.page).submitButton.first(); await submit.waitFor({ state: "visible", timeout: 15000 }); } }');
  fs.writeFileSync(path.join(dir,"ui.js"),fixture);
  fs.writeFileSync(path.join(dir,"locators.js"),[
  'export function flowLocators(page) { return {',
@@ -51,8 +51,14 @@ test("patch changes domain and project navigator, idempotently",()=>{
   assert.ok(chars.includes('process.env.GFLOW_USE_CURRENT_TAB !== "1"'));
   const locators=fs.readFileSync(path.join(dir,"locators.js"),"utf8");
   assert.ok(locators.includes("Generate Image"));
+  assert.ok(locators.includes("Bắt đầu tạo"));
+  assert.ok(locators.includes("arrow_forward"));
   assert.ok(locators.includes("textarea[placeholder]"));
   assert.ok(page.includes("gflow stage: submitting prompt"));
+  assert.ok(page.includes("gflow stage: submit controls"));
+  assert.doesNotThrow(()=>new Function(page));
+  assert.ok(page.includes("GFlow VIDEO MODE NOT SELECTED"));
+  assert.ok(page.includes("GFlow IMAGE MODE NOT SELECTED"));
  }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
 test("navigator patch refuses mismatched upstream instead of silently corrupting library",()=>{
@@ -156,4 +162,58 @@ test("GFlow job diagnostics marks stages and remains idempotent",()=>{
  const r=patchFlowJobDiagnostics(s);
  assert.match(r,/gflow stage: submitting prompt/);
  assert.equal(patchFlowJobDiagnostics(r),r);
+});
+
+test("Vietnamese Flow submit selector matches Bắt đầu tạo for image and video",()=>{
+ const {patchFlowLocators}=require("../scripts/patch-gflow.cjs");
+ const input=[
+ 'promptBox: page.locator(\'[role="textbox"][contenteditable="true"]\'),',
+ 'submitButton: page.locator("button", { hasText: "Create" }).filter({ hasText: /arrow_forward/ }),',
+ 'settingsButton: page.locator("button").filter({ hasText: /crop_16_9/ }),'
+ ].join("\n");
+ const patched=patchFlowLocators(input);
+ assert.match(patched,/Bắt đầu tạo/);
+ assert.match(patched,/arrow_forward/);
+ assert.match(patched,/Generate Image/);
+ assert.match(patched,/Start generation/);
+ assert.equal(patchFlowLocators(patched),patched);
+});
+test("GFlow video mode safety aborts before submitting when model pill still says Nano Banana",()=>{
+ const {patchFlowModeGuard,patchFlowSubmitDiagnostics}=require("../scripts/patch-gflow.cjs");
+ const source=[
+ "async runJob(input) { await this.applySettings(input.job); }",
+ 'async submit() { await submit.waitFor({ state: "visible", timeout: 15000 }); }'
+ ].join("\n");
+ const guarded=patchFlowModeGuard(source);
+ assert.match(guarded,/GFlow VIDEO MODE NOT SELECTED/);
+ assert.match(guarded,/GFlow IMAGE MODE NOT SELECTED/);
+ assert.equal(patchFlowModeGuard(guarded),guarded);
+ const diagnosed=patchFlowSubmitDiagnostics(guarded);
+ assert.match(diagnosed,/gflow stage: submit controls/);
+ assert.equal(patchFlowSubmitDiagnostics(diagnosed),diagnosed);
+});
+
+test("video mode guard refuses Nano Banana before submitting and permits Veo",async()=>{
+ const vm=require("node:vm");
+ const {patchFlowModeGuard}=require("../scripts/patch-gflow.cjs");
+ const src='class Guarded { async applySettings() {} async runJob(input) { await this.applySettings(input.job); this.submitted=true; } } Guarded';
+ const C=vm.runInNewContext(patchFlowModeGuard(src),{});
+ const model=text=>({locator:()=>({filter:()=>({first:()=>({innerText:async()=>text})})})});
+ const instance=new C();
+ instance.page=model("🍌 Nano Banana 2.1 crop_16_9 x2");
+ await assert.rejects(()=>instance.runJob({job:{type:"video"}}),/VIDEO MODE NOT SELECTED/);
+ assert.equal(instance.submitted,undefined);
+ instance.page=model("Veo 3.1 crop_16_9 x1");
+ await instance.runJob({job:{type:"video"}});
+ assert.equal(instance.submitted,true);
+});
+test("image mode guard refuses to generate an image with Veo selected",async()=>{
+ const vm=require("node:vm");
+ const {patchFlowModeGuard}=require("../scripts/patch-gflow.cjs");
+ const src='class Guarded { async applySettings() {} async runJob(input) { await this.applySettings(input.job); this.submitted=true; } } Guarded';
+ const C=vm.runInNewContext(patchFlowModeGuard(src),{});
+ const instance=new C();
+ instance.page={locator:()=>({filter:()=>({first:()=>({innerText:async()=>"Veo 3.1 crop_9_16 x1"})})})};
+ await assert.rejects(()=>instance.runJob({job:{type:"image"}}),/IMAGE MODE NOT SELECTED/);
+ assert.equal(instance.submitted,undefined);
 });

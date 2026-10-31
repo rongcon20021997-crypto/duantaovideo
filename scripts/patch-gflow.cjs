@@ -74,7 +74,7 @@ function patchFlowLocators(source){
  const lines=source.split("\n");
  const changes={
   promptBox:"    promptBox: page.locator('[role=\"textbox\"][contenteditable=\"true\"]:visible, [contenteditable=\"true\"]:visible, textarea[placeholder]:visible, textarea[aria-label]:visible'),",
-  submitButton:"    submitButton: page.getByRole(\"button\", { name: /^(?:Generate Image|Generate|Tạo ảnh)$/i }).or(page.locator(\"button:visible\").filter({ hasText: /(?:arrow_forward\\s*create|create\\s*arrow_forward|generate\\s*image|tạo\\s*ảnh)/i })),",
+  submitButton:"    submitButton: page.getByRole(\"button\", { name: /^(?:Bắt đầu tạo|Generate Image|Generate|Tạo ảnh|Tạo hình|Start generation|Create)$/i }).or(page.locator('button[aria-label=\"Bắt đầu tạo\"]:visible')).or(page.locator(\"button:visible\").filter({ hasText: /^(?:arrow_forward|arrow_forward\\s*create|create\\s*arrow_forward|generate\\s*image|tạo\\s*ảnh)$/i })),",
   settingsButton:"    settingsButton: page.locator(\"button:visible\").filter({ hasText: /crop_(?:16_9|9_16|square|portrait|landscape)|nano\\s*banana|imagen\\s*4|veo\\s*3/i }),"
  };
  for(const [key, replacement] of Object.entries(changes)){
@@ -102,6 +102,34 @@ function patchFlowJobDiagnostics(source){
  return next;
 }
 
+
+function patchFlowModeGuard(source){
+ // The pinned CLI silently ignores missing Image/Video mode options.
+ // Never send a video prompt while the visible settings pill still says Nano Banana.
+ const guard=String.raw`
+        const selectedFlowModel = await this.page.locator("button:visible").filter({hasText:/crop_(?:16_9|9_16|square|portrait|landscape)/}).first().innerText().catch(() => "");
+        if (input.job.type === "video" && /nano\s*banana|imagen/i.test(selectedFlowModel) && !/veo/i.test(selectedFlowModel)) {
+          throw new Error("GFlow VIDEO MODE NOT SELECTED: the current Google Flow model is " + selectedFlowModel.replace(/\s+/g," ").trim() + ". Select Video/Veo in the settings pill before running video, then retry.");
+        }
+        if (input.job.type === "image" && /veo/i.test(selectedFlowModel) && !/banana|imagen/i.test(selectedFlowModel)) {
+          throw new Error("GFlow IMAGE MODE NOT SELECTED: the current Google Flow model is " + selectedFlowModel.replace(/\s+/g," ").trim() + ". Select Image/Nano Banana first.");
+        }`;
+ if(source.includes("GFlow VIDEO MODE NOT SELECTED"))return source;
+ const anchor="await this.applySettings(input.job);";
+ if(!source.includes(anchor))throw Error("Pinned GFlow runJob settings signature changed.");
+ return source.replace(anchor,anchor+"\n"+guard);
+}
+function patchFlowSubmitDiagnostics(source){
+ // Clear error context for real Vietnamese Google Flow "Bắt đầu tạo".
+ const anchor='await submit.waitFor({ state: "visible", timeout: 15000 });';
+ const guard=String.raw`const visibleSubmitLabels = await this.page.locator("button:visible").evaluateAll(buttons => buttons.map(b => ({label:b.getAttribute("aria-label")||"",text:(b.textContent||"").trim().slice(0,70)})).filter(x => /bắt đầu tạo|arrow_forward|generate|create|tạo ảnh/i.test(x.label+" "+x.text)).slice(0,10));
+        console.error("gflow stage: submit controls " + JSON.stringify(visibleSubmitLabels));
+        await submit.waitFor({ state: "visible", timeout: 15000 }).catch(() => { throw new Error("GFlow submit button not found (VN: Bắt đầu tạo). Visible controls: "+JSON.stringify(visibleSubmitLabels)); });`;
+ if(source.includes("gflow stage: submit controls"))return source;
+ if(!source.includes(anchor))throw Error("Pinned GFlow submit signature changed.");
+ return source.replace(anchor,guard);
+}
+
 function patchGFlow(root=path.resolve(__dirname,"..")){
  const dir=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  let changed=0;
@@ -111,7 +139,7 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    const before=fs.readFileSync(file,"utf8");
    let after=before.split(oldUrl).join(newUrl);
    if(basename==="ui.js") after=replaceNavigation(after);
-   if(basename==="page.js") after=patchFlowJobDiagnostics(patchFlowOpen(after));
+   if(basename==="page.js") after=patchFlowSubmitDiagnostics(patchFlowJobDiagnostics(patchFlowModeGuard(patchFlowOpen(after))));
    if(!after.includes(newUrl))throw new Error("Expected Flow URL not found in "+basename);
    if(after!==before){fs.writeFileSync(file,after,"utf8");changed++;}
  }
@@ -141,4 +169,4 @@ if(require.main===module){
  try{const info=patchGFlow();console.log("GFlow project compatibility: "+info.origin+" ("+info.changed+" modules updated)");}
  catch(error){console.error("GFlow compatibility patch failed: "+error.message);process.exitCode=1;}
 }
-module.exports={patchGFlow,patchFlowLocators,patchFlowJobDiagnostics,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
+module.exports={patchFlowModeGuard,patchFlowSubmitDiagnostics,patchGFlow,patchFlowLocators,patchFlowJobDiagnostics,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
