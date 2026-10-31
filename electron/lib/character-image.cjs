@@ -129,7 +129,8 @@ async function composerReferenceIds(page){
 }
 async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,signal,timeoutMs=180000){
  const deadline=Date.now()+timeoutMs;
- let lastNotice=0,selectedSrc=null;
+ let lastNotice=0,selectedSrc=null,triedUploadFilter=false;
+ const started=Date.now();
  const oldCards=earlierCards.map(x=>x.src);
  while(Date.now()<deadline){
   checkStopped(signal);
@@ -138,6 +139,16 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,log,sig
   if(await isRightsVisible(page))await waitForRightsDecision(page,log,signal);
   const current=await inspectMediaCards(page);
   const newCard=chooseNewMediaCard(current.cards,oldCards);
+  // Flow can leave "Tất cả" on an empty cached view after upload. Switch
+  // once to "Tệp tải lên" (Uploaded files) to refresh the asset collection.
+  if(!newCard&&!triedUploadFilter&&Date.now()-started>16000){
+   triedUploadFilter=true;
+   const uploaded=page.getByRole("button",{name:/tệp tải lên|uploaded files|uploads/i}).first();
+   if(await uploaded.isVisible().catch(()=>false)){
+    await uploaded.click({timeout:5000}).catch(()=>undefined);
+    log("Đã chuyển sang mục Tệp tải lên để tìm ảnh mẫu vừa upload.");
+   }
+  }
   if(newCard){
    if(selectedSrc!==newCard.src){
     log("Đã phát hiện thumbnail ảnh mẫu mới trong hộp media.");
