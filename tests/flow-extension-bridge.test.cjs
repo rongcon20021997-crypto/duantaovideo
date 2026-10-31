@@ -1,5 +1,6 @@
 const test=require("node:test"),assert=require("node:assert/strict");
-const core=require("../extension/asset-core.js");
+require("../extension/asset-core.js");
+const core=globalThis.DTVAssetCore;
 const bridge=require("../electron/lib/flow-extension-bridge.cjs");
 const p="https://flow.google.com/project/123e4567-e89b-12d3-a456-426614174000";
 test("extension identifies explicit Flow DOM media id without claiming it is public Google ID",()=>{
