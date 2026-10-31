@@ -13,7 +13,7 @@ function scoreUploadControl(item){
  let score=0;
  if(/upload (?:image|photo|media|file)|upload from|browse files|choose files|tải ảnh|tải lên|chọn ảnh/i.test(all))score+=40;
  if(/add (?:image|media|photo|ingredient|reference)|add to prompt|thêm (?:ảnh|hình|media)|ingredient|reference image|attach (?:file|image|media)/i.test(all))score+=35;
- if(/add_2|add_circle|attach_file|add_photo_alternate|photo_library|image_add/i.test(icon+" "+text))score+=27;
+ if(/add_2|add_circle|attach_file|add_photo_alternate|photo_library|image_add|upload_file|file_upload|cloud_upload/i.test(icon+" "+text))score+=27;
  if(/\badd\b|\bplus\b|\bupload\b|\battach\b|thêm/i.test(all))score+=9;
  if(item.popup)score+=5;
  if(item.near)score+=10;
@@ -68,4 +68,33 @@ async function pickUploadTrigger(page,log=()=>{}){
  log("Đã tìm thấy nút thêm ảnh theo DOM: "+(best.aria||best.text||best.title||best.icon).slice(0,85));
  return target;
 }
-module.exports={scoreUploadControl,rankUploadControls,examineUploadControls,pickUploadTrigger};
+
+async function pickPickerUploadButton(page,log=()=>{}){
+ const scope=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"],[role="menu"]'))||page;
+ const locator=scope.locator(SELECTOR);
+ const controls=await locator.evaluateAll(elements=>elements.map(el=>{
+   const r=el.getBoundingClientRect(),style=getComputedStyle(el);
+   const icon=[...el.querySelectorAll('[class*="material"],[data-icon],svg')].slice(0,4).map(x=>
+     [x.textContent?.trim(),x.getAttribute("data-icon"),x.getAttribute("aria-label")].filter(Boolean).join(" ")
+   ).join(" ").slice(0,80);
+   return {text:(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().slice(0,90),
+    aria:(el.getAttribute("aria-label")||"").slice(0,90),
+    title:(el.getAttribute("title")||el.getAttribute("data-tooltip")||"").slice(0,90),
+    icon,visible:r.width>0&&r.height>0&&style.visibility!=="hidden"&&style.display!=="none",
+    popup:!!el.getAttribute("aria-haspopup"),near:true,insideComposer:true};
+ }));
+ const matches=rankUploadControls(controls).filter(c=>
+    /upload|tải|chọn (?:tệp|ảnh)|browse|choose (?:file|image)|computer|device|upload_file|file_upload|cloud_upload/i.test(
+    [c.text,c.aria,c.title,c.icon].join(" ")));
+ if(!matches.length){
+   log("Các mục trong hộp thoại chọn ảnh: "+controls.filter(c=>c.visible).slice(0,18).map(c=>
+     (c.aria||c.text||c.title||c.icon||"?").slice(0,40)).join(" | "));
+   return null;
+ }
+ const found=locator.nth(matches[0].index);
+ if(!(await found.isVisible().catch(()=>false)))return null;
+ log("Đã tìm thấy chức năng Upload ảnh: "+(matches[0].aria||matches[0].text||matches[0].icon));
+ return found;
+}
+
+module.exports={scoreUploadControl,rankUploadControls,examineUploadControls,pickUploadTrigger,pickPickerUploadButton};

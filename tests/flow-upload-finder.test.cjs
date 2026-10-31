@@ -23,3 +23,8 @@ test("generic + button must be near composer and visible",()=>{
  assert.ok(scoreUploadControl({aria:"Add",near:false,insideComposer:false,visible:true})<24);
  assert.ok(scoreUploadControl({aria:"Add",near:true,insideComposer:true,visible:false})<24);
 });
+
+test("upload icon only in media picker is a high-score upload control",()=>{
+ const x=rankUploadControls([{icon:"cloud_upload",visible:true,near:true,insideComposer:true},{text:"Add to Prompt",visible:true,near:true,insideComposer:true}]);
+ assert.equal(x[0].index,0);
+});

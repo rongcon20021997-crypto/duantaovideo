@@ -6,7 +6,7 @@ const fsp=require("node:fs/promises");
 const path=require("node:path");
 const {createRequire}=require("node:module");
 const {projectUrl}=require("./project.cjs");
-const {pickUploadTrigger,examineUploadControls}=require("./flow-upload-finder.cjs");
+const {pickUploadTrigger,pickPickerUploadButton,examineUploadControls}=require("./flow-upload-finder.cjs");
 
 const INPUTS='[role="textbox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea:visible';
 const FILES='input[type="file"]';
@@ -116,7 +116,7 @@ async function uploadReference(page,filepath,log,signal){
  if(uploadType==="direct-input")await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
  if(uploadType==="picker"){
    const scope=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]'))||page;
-   const upload=await visibleOne(scope.getByRole("button",{name:UPLOAD}).or(scope.getByText(UPLOAD)));
+   const upload=await visibleOne(scope.getByRole("button",{name:UPLOAD}).or(scope.getByText(UPLOAD)))||await pickPickerUploadButton(page,log);
    if(!upload){
      const fileinput=page.locator(FILES).last();
      if(await fileinput.count())await fileinput.setInputFiles(filepath,{timeout:10000});
