@@ -6,6 +6,7 @@ const fsp=require("node:fs/promises");
 const path=require("node:path");
 const {createRequire}=require("node:module");
 const {projectUrl}=require("./project.cjs");
+const {pickUploadTrigger,examineUploadControls}=require("./flow-upload-finder.cjs");
 
 const INPUTS='[role="textbox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea:visible';
 const FILES='input[type="file"]';
@@ -100,8 +101,16 @@ async function invokeUpload(page,button,filepath){
 async function uploadReference(page,filepath,log,signal){
  checkStopped(signal);
  const starting=await snapshot(page);
- const add=await visibleOne(page.getByRole("button",{name:ADD}).or(page.locator('button[aria-haspopup="dialog"]').filter({hasText:ADD})));
- if(!add&&!(await page.locator(FILES).count()))throw Error("Không thấy nút Add Image hoặc input upload ảnh của Google Flow.");
+ let add=await pickUploadTrigger(page,log);
+ if(!add&&!(await page.locator(FILES).count())){
+   const box=await visibleOne(page.locator(INPUTS));
+   if(box){
+     await box.hover({timeout:2500}).catch(()=>undefined);
+     add=await pickUploadTrigger(page,log);
+   }
+ }
+ if(!add&&!(await page.locator(FILES).count()))throw Error("Không tìm thấy nút thêm ảnh cạnh ô prompt. Danh sách nút đã ghi trong Nhật ký và báo cáo chẩn đoán.");
+
  log("Đưa ảnh mẫu vào Google Flow: "+path.basename(filepath));
  const uploadType=add?await invokeUpload(page,add,filepath):"direct-input";
  if(uploadType==="direct-input")await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
@@ -231,6 +240,13 @@ async function captureFailure(page,outDir,log){
   await fsp.mkdir(dir,{recursive:true});
   const file=path.join(dir,"character-image-"+Date.now()+".png");
   await page.screenshot({path:file,timeout:7000,fullPage:false});
+  try{
+    const controls=await examineUploadControls(page);
+    const meta=controls.filter(x=>x.visible).map(x=>({text:x.text,aria:x.aria,title:x.title,icon:x.icon,near:x.near,popup:x.popup,insideComposer:x.insideComposer})).slice(0,90);
+    const report=file.replace(/\.png$/i,"-controls.json");
+    await fsp.writeFile(report,JSON.stringify({url:page.url(),controls:meta},null,2),"utf8");
+    log("Đã lưu danh sách nút DOM để sửa chính xác: "+report);
+  }catch(err){log("Không đọc được danh sách nút: "+String(err?.message||err));}
   log("Đã lưu ảnh chẩn đoán: "+file);
   return file;
  }catch{return null;}
