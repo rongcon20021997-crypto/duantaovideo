@@ -7,6 +7,8 @@ const path=require("node:path");
 const {createRequire}=require("node:module");
 const {projectUrl}=require("./project.cjs");
 const {getReference,rememberReference}=require("./flow-reference-cache.cjs");
+const {findExtensionAssetByFilename,selectExtensionAsset}=require("./flow-extension-bridge.cjs");
+const lastExtensionRef=new WeakMap();
 const {pickUploadTrigger,pickPickerUploadButton,examineUploadControls}=require("./flow-upload-finder.cjs");
 const {waitForRightsDecision,isRightsVisible,inspectMediaCards,chooseNewMediaCard,selectMediaCard,findPickerConfirm,findUploadedFilename,filenameSearchPrefix}=require("./flow-rights-upload.cjs");
 
@@ -165,6 +167,7 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
   if(uploadNameVisible){
    const confirm=await findPickerConfirm(page);
    if(confirm){
+    await captureExtensionRef(page,filepath,log);
     if(await confirm.isEnabled().catch(()=>false)){
      log("Đã nhận diện đúng ảnh mẫu "+filenameSearchPrefix(filepath)+" trong hộp chọn media.");
      await attachUploadedReference(page,confirm,composerBefore,log);
@@ -190,6 +193,7 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
    if(selectedSrc!==newCard.src){
     log("Đã phát hiện thumbnail ảnh mẫu mới trong hộp media.");
     if(!newCard.selected)await selectMediaCard(page,newCard);
+    await captureExtensionRef(page,filepath,log);
     selectedSrc=newCard.src;
     log("Đã chọn ảnh mẫu tải lên. Đang tìm nút Thêm vào câu lệnh.");
    }
@@ -247,13 +251,27 @@ async function openFreshReferencePicker(page,filepath,log,signal,ops={}){
  }
  throw Error("Không tìm thấy bộ chọn ảnh từ dấu + của ô prompt sau 2 lần kiểm tra. Không tự điều hướng sang Tệp tải lên, không tạo ảnh thiếu mẫu.");
 }
+async function captureExtensionRef(page,filepath,log){
+ const ref=await findExtensionAssetByFilename(page,filepath).catch(()=>null);
+ if(ref?.key){
+  lastExtensionRef.set(page,ref);
+  log("Extension nhận diện ảnh mẫu ["+ref.kind+"]: "+ref.key.slice(0,90));
+ }
+ return ref;
+}
 async function attachExistingReference(page,filepath,composerBefore,log,signal,opened,ops={}){
  if(!opened.upload&&!opened.confirm)return false;
  const cache=ops.cached||null;
  checkStopped(signal);
  const prefix=filenameSearchPrefix(filepath);
  let selected=false;
- if(opened.matching&&prefix){
+ // Prefer the precise ID remembered by the extension. The key is scoped to
+ // the picker and cannot accidentally target the previously generated scene.
+ if(cache?.assetKey){
+  selected=await (ops.selectExtensionAsset||selectExtensionAsset)(page,cache.assetKey);
+  if(selected)log("Đã chọn lại ảnh mẫu bằng ID từ extension: "+cache.assetKey.slice(0,85));
+ }
+ if(!selected&&opened.matching&&prefix){
   const label=page.getByText(prefix,{exact:false}).first();
   if(await label.isVisible().catch(()=>false)){
    await label.click({timeout:5000});
@@ -263,6 +281,7 @@ async function attachExistingReference(page,filepath,composerBefore,log,signal,o
  if(!selected&&cache?.assetSrc){
   selected=await (ops.selectCachedAsset||selectCachedAssetBySrc)(page,cache.assetSrc);
  }
+ if(selected)await captureExtensionRef(page,filepath,log);
  if(!selected)return false;
  log("Đang dùng lại đúng ảnh mẫu đã có trên Flow: "+path.basename(filepath));
  let confirm=null;
@@ -339,12 +358,15 @@ async function showUploadedAssetsInsidePicker(page,log){
 async function uploadReference(page,filepath,log,signal,cacheDir,ops={}){
  checkStopped(signal);
  const composerBefore=await (ops.composerRefs||composerReferenceIds)(page);
+ lastExtensionRef.delete(page);
  const stored=getReference(page.url(),filepath,cacheDir);
  const picker=await (ops.openPicker||openFreshReferencePicker)(page,filepath,log,signal);
  const afterAttach=async()=>{
   const refs=await (ops.composerRefs||composerReferenceIds)(page);
   const newAssetSrc=refs.find(src=>!composerBefore.includes(src))||stored?.assetSrc||null;
-  rememberReference(page.url(),filepath,cacheDir,newAssetSrc);
+  const extensionRef=lastExtensionRef.get(page)||null;
+  rememberReference(page.url(),filepath,cacheDir,newAssetSrc,extensionRef);
+  lastExtensionRef.delete(page);
  };
  if(stored){
   log("Ảnh mẫu đã upload trước đó vào project này. Chọn lại từ thư viện, KHÔNG upload bản mới: "+path.basename(filepath));

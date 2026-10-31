@@ -151,3 +151,11 @@ DuAnTaoVideo lưu một **chỉ mục upload ảnh mẫu theo project Google Flo
 - Nếu file mẫu thay đổi nội dung hoặc mở project khác, app coi đó là tham chiếu khác.
 - Nếu Flow xóa ảnh mẫu khỏi thư viện hoặc không thể tìm thấy ảnh đã ghi nhớ, app báo rõ và **không tự upload lại 5–6 lần**, tránh trùng lặp và gắn nhầm ảnh cảnh trước.
 - Nếu ảnh cũ vẫn còn trên Flow nhưng app không nhận ra, cần kiểm tra danh sách và ảnh chẩn đoán của bộ chọn media; không nên sửa/xóa index trừ khi bạn muốn upload lại từ đầu.
+
+## Extension lấy ID ảnh mẫu Flow → kết nối Electron
+
+**Cài lần đầu:** mở Chrome do GFlow Doctor điều khiển, vào `chrome://extensions` → bật Developer mode → Load unpacked → chọn thư mục mở bằng nút **Cài đặt → Mở thư mục Extension**. Sau đó tải lại project Flow và bấm **Kiểm tra Extension Flow**. Extension cần mở bộ chọn media (dấu + cạnh ô prompt) mới đánh dấu các thumbnail và hiển thị số ảnh tìm được.
+
+Extension MV3 chỉ đọc DOM/ảnh hiển thị trên `https://flow.google.com/project/*`. Nó không nghe request nội bộ, không truy cập cookie và không liên lạc với server. Nếu DOM có thuộc tính `data-media-id`, `data-asset-id`, ... extension ghi mã `dom:` với nguồn DOM (không bảo đảm chính thức). Nếu không có, ghi fingerprint `local:` theo URL ảnh đã bỏ query tạm thời và tên file. Dữ liệu được lưu bằng `chrome.storage.local`; không lưu URL ảnh có token trong bộ nhớ extension.
+
+DuAnTaoVideo đọc cùng các thuộc tính DOM qua Playwright/CDP, lưu khóa ảnh mẫu vào `.duantaovideo-flow-references.json` trong thư mục đầu ra. Với cảnh 2–6, app ưu tiên chọn ảnh khớp ID, rồi mới fallback tên tệp hoặc ảnh src. Nếu không xác minh được, dừng trước khi tạo cảnh để tránh dùng nhầm nhân vật. Extension hoạt động tốt nhất khi ảnh mẫu vẫn hiện trong picker và thuộc tính ID/URL không thay đổi; một mã fingerprint cục bộ có thể không theo được ảnh sau khi Google thay đường dẫn CDN.

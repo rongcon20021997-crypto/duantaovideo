@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "DuAnTaoVideo — Flow Asset IDs",
+  "version": "1.0.0",
+  "description": "Remember visible Google Flow reference media identifiers for DuAnTaoVideo. DOM-only, no private APIs.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "action": {
+    "default_title": "DuAnTaoVideo Flow Assets",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://flow.google.com/*"
+      ],
+      "js": [
+        "asset-core.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+}

@@ -59,6 +59,12 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "duantaovideo-extension"
+      }
+    ]
   }
 }

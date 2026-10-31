@@ -36,3 +36,18 @@ test("project upload index contains only project, filename, content hash and byt
   assert.match(raw,/sample.jpg/);
  }finally{cache.clearMemory();fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test("persists extension asset key across app restart and keeps project isolation",()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"flow-ref-id-"));
+ try{
+  const image=path.join(dir,"sample.jpg");fs.writeFileSync(image,"same-picture-2026");
+  cache.rememberReference(projectA,image,dir,null,{key:"dom:data-media-id:asset-12345",kind:"dom"});
+  assert.equal(cache.getReference(projectA,image,dir).assetKey,"dom:data-media-id:asset-12345");
+  cache.clearMemory();
+  const restored=cache.getReference(projectA,image,dir);
+  assert.equal(restored.assetKey,"dom:data-media-id:asset-12345");
+  assert.equal(restored.assetKind,"dom");
+  assert.equal(cache.getReference(projectB,image,dir),null);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir,cache.CACHE_FILE),"utf8"),/private.example|cookie|token/);
+ }finally{cache.clearMemory();fs.rmSync(dir,{recursive:true,force:true});}
+});

@@ -163,3 +163,24 @@ test("Uploaded Files filter is clicked only when found inside the picker, never 
  assert.equal(await showUploadedAssetsInsidePicker(page,()=>{}),true);
  assert.equal(clicked,true);
 });
+
+test("scene reuse receives the exact extension key stored for this character",async()=>{
+ const cache=require("../electron/lib/flow-reference-cache.cjs");
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"flow-id-use-"));
+ try{
+  const sample=path.join(dir,"chef.png");fs.writeFileSync(sample,"image-bytes");
+  cache.rememberReference(url,sample,dir,null,{key:"dom:data-asset-id:chef-1234",kind:"dom"});
+  let called=0,attached=false;
+  const page={url:()=>url,waitForTimeout:async()=>{}};
+  await uploadReference(page,sample,()=>{},undefined,dir,{
+   composerRefs:async()=>attached?["blob:attached"]:[],
+   openPicker:async()=>({upload:{},matching:false}),
+   findFilename:async()=>false,
+   attachExisting:async(_p,_file,_prev,_log,_signal,_opened,ops)=>{
+    assert.equal(ops.cached.assetKey,"dom:data-asset-id:chef-1234");
+    called++;attached=true;return true;
+   }
+  });
+  assert.equal(called,1);
+ }finally{cache.clearMemory();fs.rmSync(dir,{recursive:true,force:true});}
+});

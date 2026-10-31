@@ -34,18 +34,18 @@ function getReference(project,file,dir){
  if(session)return {...session,from:"session"};
  const disk=readIndex(dir).find(e=>indexKey(e.project,{hash:e.hash})===key);
  if(!disk)return null;
- const entry={project:projectUrl(project),hash:fp.hash,filename:disk.filename,bytes:fp.bytes,assetSrc:null};
+ const entry={project:projectUrl(project),hash:fp.hash,filename:disk.filename,bytes:fp.bytes,assetSrc:null,assetKey:typeof disk.assetKey==="string"?disk.assetKey:null,assetKind:typeof disk.assetKind==="string"?disk.assetKind:null};
  memory.set(key,entry);
  return {...entry,from:"disk"};
 }
-function rememberReference(project,file,dir,assetSrc=null){
+function rememberReference(project,file,dir,assetSrc=null,assetRef=null){
  const fp=fileFingerprint(file),key=indexKey(project,fp),canonical=projectUrl(project);
  const existing=memory.get(key);
- const record={project:canonical,hash:fp.hash,filename:fp.filename,bytes:fp.bytes,assetSrc:assetSrc||existing?.assetSrc||null};
+ const record={project:canonical,hash:fp.hash,filename:fp.filename,bytes:fp.bytes,assetSrc:assetSrc||existing?.assetSrc||null,assetKey:assetRef?.key||existing?.assetKey||null,assetKind:assetRef?.kind||existing?.assetKind||null};
  memory.set(key,record);
  const index=readIndex(dir);
  const next=index.filter(x=>indexKey(x.project,{hash:x.hash})!==key);
- next.push({project:canonical,hash:fp.hash,filename:fp.filename,bytes:fp.bytes});
+ next.push({project:canonical,hash:fp.hash,filename:fp.filename,bytes:fp.bytes,...(record.assetKey?{assetKey:record.assetKey,assetKind:record.assetKind}:{})});
  fs.mkdirSync(dir,{recursive:true});
  const target=path.join(dir,CACHE_FILE),temp=target+".tmp-"+process.pid;
  fs.writeFileSync(temp,JSON.stringify({version:1,entries:next.slice(-100)},null,2)+"\n","utf8");

@@ -8,6 +8,7 @@ const flowProject=require("./lib/project.cjs");
 const {inspectFlowUi}=require("./lib/flow-diagnostics.cjs");
 const {runCharacterImage}=require("./lib/character-image.cjs");
 const {resolveSceneReferences}=require("./lib/scene-references.cjs");
+const {inspectExtensionInChrome}=require("./lib/flow-extension-bridge.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -135,6 +136,24 @@ ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile"
 ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
 ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
 ipcMain.handle("flow:diagnose",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());await requireOpenedGflowProject(ws);const result=await diagnoseOpenFlow(ws,true);log("Chẩn đoán giao diện Flow: "+result.reason+" | "+(result.screenshot||result.jsonPath||"không có ảnh chụp"));return result;});
+ipcMain.handle("flow:extension:status",async(_,x)=>{
+ idle();
+ const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());
+ const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+ const tip=chrome.guidance(state);if(tip)throw Error(tip);
+ if(!state.debuggingReady)throw Error("Mở Chrome qua GFlow Doctor để kiểm tra extension.");
+ const result=await inspectExtensionInChrome({port:state.debugPort,project:ws.project,cliPath:cliPath()});
+ log("Extension Flow: "+(result.ready?"đang hoạt động":"chưa cài/chưa kích hoạt")+", ảnh trong bộ chọn: "+result.visibleAssetCount);
+ return result;
+});
+ipcMain.handle("flow:extension:folder",async()=>{
+ idle();
+ const dir=app.isPackaged?path.join(process.resourcesPath,"duantaovideo-extension"):path.resolve(__dirname,"..","extension");
+ if(!fs.existsSync(path.join(dir,"manifest.json")))throw Error("Chưa tìm thấy thư mục extension tại "+dir);
+ const error=await shell.openPath(dir);
+ if(error)throw Error("Không mở được thư mục extension: "+error);
+ return dir;
+});
 ipcMain.handle("flow:project:detect",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const tabs=await inspectGflowProject(ws);const result={...tabs,message:flowProject.explain(tabs)};if(tabs.projects.length===1){const next=await save({...ws,project:tabs.projects[0]});result.savedProject=next.project;log("Đã lấy project thực sự mở trong Chrome GFlow: "+next.project);}return result;});
 
 async function createCharacterImageDirect(x){
