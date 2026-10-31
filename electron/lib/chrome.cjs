@@ -97,9 +97,14 @@ async function inspect(options = {}) {
 }
 function guidance(state) {
   if (state.plainLoginChromeRunning) {
-    return "Chrome đăng nhập của DuAnTaoVideo vẫn đang mở (PID " +
-      state.windowsProcessIds.join(", ") +
-      "). Do gflow-cli chưa xử lý chuyển phiên Chrome trên Windows, hãy đóng TẤT CẢ cửa sổ Chrome thuộc profile gflow vừa mở (không đóng Chrome cá nhân), sau đó bấm GFlow Doctor lại. Không xóa profile hoặc cookie. Profile: " + state.profileDir;
+    return "Chrome GFlow đang mở nhưng CHƯA bật cổng điều khiển (CDP). " +
+      "Vì vậy ứng dụng không thể bấm nút hoặc upload ảnh trong cửa sổ này. " +
+      "Hãy lưu công việc, ĐÓNG các cửa sổ Chrome thuộc profile GFlow (KHÔNG đóng Chrome cá nhân), " +
+      "rồi bấm GFlow Doctor để mở lại phiên Chrome có CDP. " +
+      "Sau đó mở sẵn project trong cửa sổ Chrome GFlow vừa được Doctor khởi chạy và bấm Tạo hình nhân vật bằng ảnh mẫu. " +
+      "KHÔNG bấm Đăng nhập Chrome lần nữa nếu đã đăng nhập. Không xóa profile hoặc cookie. " +
+      "Các PID thuộc profile này: " + state.windowsProcessIds.join(", ") +
+      ". Profile: " + state.profileDir;
   }
   return null;
 }

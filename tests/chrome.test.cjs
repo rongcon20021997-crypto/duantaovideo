@@ -20,7 +20,9 @@ test("Windows gflow profile dir isolated and validated",()=>{
 });
 test("manual close tip only for undebuggable gflow process",()=>{
  const state={plainLoginChromeRunning:true,windowsProcessIds:[123],profileDir:"C:\\temp\\.gflow\\profiles\\default"};
- assert.match(chrome.guidance(state),/đóng TẤT CẢ cửa sổ Chrome/);
+ assert.match(chrome.guidance(state),/CHƯA bật cổng điều khiển \(CDP\)/);
+ assert.match(chrome.guidance(state),/GFlow Doctor/);
+ assert.match(chrome.guidance(state),/KHÔNG bấm Đăng nhập Chrome lần nữa/);
  assert.equal(chrome.guidance({...state,plainLoginChromeRunning:false}),null);
 });
 test("Windows process matcher only returns scoped Chrome profile pids",async()=>{
