@@ -112,3 +112,14 @@ Khi tạo ảnh hoặc video bằng GFlow CLI, ứng dụng sử dụng tab Goog
 - Ứng dụng kiểm tra ô nhập prompt và nút Generate Image/Create, liệt kê nhãn điều khiển và lưu ảnh chụp màn hình ở thư mục Đầu ra/diagnostics. Không lưu cookie hay nội dung HTML. Ảnh chụp có thể chứa thông tin cá nhân hiển thị trên màn hình: xem lại trước khi chia sẻ.
 - Khi bấm Tạo ảnh, ứng dụng chạy bước kiểm tra, phát log gflow stage và chỉ báo hoàn thành khi tìm thấy file ảnh tải về. Nếu lệnh lỗi, ảnh chụp được lưu trong máy và đường dẫn được hiển thị. Không tự thử lại hoặc gửi trùng lệnh có thể tốn lượt.
 - Nếu Chrome có sẵn project nhưng không nhận ô prompt hoặc nút Generate Image, ảnh chụp và báo cáo sẽ cho biết giao diện thực tế khác selector nào. Cần kiểm tra trên máy có đăng nhập để xác minh end-to-end.
+
+## Tạo hình nhân vật từ ảnh mẫu — dùng tab Flow đang mở
+
+Đường chạy mới **Tạo hình nhân vật bằng ảnh mẫu** chạy bằng Playwright qua Chrome CDP, không gọi `gflow character create` và không tự mở /project hoặc /characters. Nó thao tác trực tiếp vào tab project Google Flow đã mở trong phiên Chrome của GFlow Doctor.
+
+1. Mở GFlow Doctor, sau đó tự mở project hiện có trong cửa sổ Chrome debugging.
+2. Vào tab **Nhân vật** trong DuAnTaoVideo, bấm **Chọn ảnh mẫu từ máy** (1–2 PNG/JPG/WEBP), nhập **Prompt mô tả nhân vật** và chỉnh phong cách nếu muốn.
+3. Bấm **Tạo hình nhân vật bằng ảnh mẫu**. Ứng dụng tìm tab, chọn Image, mở Add Image, upload ảnh qua giao diện trình duyệt, Add to Prompt, nhập prompt, click Generate Image, theo dõi kết quả mới và tải ảnh.
+4. Khi tải ảnh thành công, kết quả hiển thị ở khung **Kết quả nhân vật** và lưu dưới thư mục output. Nút **Mở file ảnh** mở ảnh đó. Lần mở app tiếp theo vẫn xem được ảnh đã tạo.
+
+**Giới hạn cần xác minh live:** DOM Google Flow thay đổi và giao diện upload có thể khác giữa tài khoản. Module hiện chạy trực tiếp trên UI và dừng khi không xác minh được đã thêm ảnh mẫu, tránh gửi prompt thiếu ảnh. Khi lỗi, xem nhật ký ngay tại tab Nhân vật và ảnh chẩn đoán trong output/diagnostics. Bản CI chỉ kiểm thử logic, không có quyền đăng nhập tài khoản Google Flow để chạy tạo ảnh thật. Không tự động nhấn Generate Image nhiều lần.

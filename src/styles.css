@@ -6,3 +6,10 @@
 .activity{border:1px solid #6272da;background:#202b50;color:#e2eaff;position:sticky;top:0;z-index:30}
 .image-controls{margin:0 0 15px;flex-wrap:wrap}
 .image-hint{font-size:11px;line-height:1.65;color:#8ea1ba;margin:0 0 18px}
+
+.character-preview{display:flex;justify-content:center;align-items:center;min-height:250px;background:#0b1320;border:1px solid #2a3b51;border-radius:12px;margin-bottom:18px;overflow:hidden}
+.character-preview img{display:block;max-height:460px;width:100%;height:auto;object-fit:contain}
+.character-run-log{margin-top:16px}
+.character-run-log>strong{display:block;color:#9cafc9;font-size:12px;margin-bottom:10px}
+.character-run-log .terminal{height:190px}
+.character-preview+.horizontal .image-hint{overflow-wrap:anywhere;max-width:100%}

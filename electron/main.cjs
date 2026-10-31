@@ -6,6 +6,7 @@ const chrome=require("./lib/chrome.cjs");
 const {imageCommand}=require("./lib/image.cjs");
 const flowProject=require("./lib/project.cjs");
 const {inspectFlowUi}=require("./lib/flow-diagnostics.cjs");
+const {runCharacterImage}=require("./lib/character-image.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -102,6 +103,57 @@ ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({us
 ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
 ipcMain.handle("flow:diagnose",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());await requireOpenedGflowProject(ws);const result=await diagnoseOpenFlow(ws,true);log("Chẩn đoán giao diện Flow: "+result.reason+" | "+(result.screenshot||result.jsonPath||"không có ảnh chụp"));return result;});
 ipcMain.handle("flow:project:detect",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());const tabs=await inspectGflowProject(ws);const result={...tabs,message:flowProject.explain(tabs)};if(tabs.projects.length===1){const next=await save({...ws,project:tabs.projects[0]});result.savedProject=next.project;log("Đã lấy project thực sự mở trong Chrome GFlow: "+next.project);}return result;});
+
+ipcMain.handle("flow:character:image",async(_,x)=>{
+ idle();
+ const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());
+ const prompt=[ws.character.prompt,ws.character.description].filter(Boolean).join(". ").trim();
+ if(!prompt)throw Error("Nhập prompt tạo hình nhân vật trước khi chạy.");
+ if(!ws.character.referenceImages.length)throw Error("Thêm ít nhất một ảnh mẫu của nhân vật trước khi chạy.");
+ const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+ const tip=chrome.guidance(state);if(tip)throw Error(tip);
+ if(!state.debuggingReady)throw Error("Chrome GFlow chưa mở phiên debugging. Bấm GFlow Doctor, vào sẵn một project rồi bấm Tạo hình nhân vật.");
+ const tabs=await flowProject.listTabs(state.debugPort);
+ let project=flowProject.projectUrl(ws.project);
+ if(!project||!tabs.projects.includes(project)){
+   if(tabs.projects.length===1){project=tabs.projects[0];log("Tự nhận project đang mở: "+project);}
+   else throw Error("Không xác định được project đang mở. Đóng bớt tab Flow hoặc dùng Cài đặt → Dò project đang mở.");
+ }
+ await fsp.mkdir(ws.outputDir,{recursive:true});
+ const controller=new AbortController();
+ active={cancelled:false,child:null,controller};
+ emit({kind:"run",running:true});
+ const logStep=line=>log("TẠO HÌNH NHÂN VẬT: "+line);
+ try{
+   logStep("Bắt đầu, dùng "+ws.character.referenceImages.length+" ảnh mẫu và prompt nhân vật.");
+   const result=await runCharacterImage({
+     port:state.debugPort,project,referenceImages:ws.character.referenceImages,prompt,
+     outDir:path.resolve(ws.outputDir),id:w.safeJobId("reference-"+Date.now()),
+     cliPath:cliPath(),signal:controller.signal,log:logStep
+   });
+   if(active.cancelled)throw Error("Đã dừng tạo hình nhân vật.");
+   const next=await save({...ws,project:result.project,character:{...ws.character,thumbnail:result.image}});
+   const buffer=await fsp.readFile(result.image);
+   if(buffer.length>24*1024*1024)throw Error("Ảnh đã được lưu nhưng quá lớn để hiển thị trong app: "+result.image);
+   const ext=path.extname(result.image).toLowerCase();
+   const mime=ext===".webp"?"image/webp":ext===".jpg"?"image/jpeg":"image/png";
+   logStep("Hoàn thành. Ảnh đã lưu và hiện trong app: "+result.image);
+   return {image:result.image,preview:"data:"+mime+";base64,"+buffer.toString("base64"),project:next.project,referenceCount:result.referenceCount};
+ }catch(e){
+   logStep("LỖI: "+String(e?.message||e));
+   throw e;
+ }finally{active=null;emit({kind:"run",running:false});}
+});
+ipcMain.handle("media:character-preview",async(_,x)=>{
+ const ws=workspace(),file=String(x?.file||ws.character.thumbnail||"");
+ const base=path.resolve(ws.outputDir),full=path.resolve(file);
+ if(!file||!full.startsWith(base+path.sep)||!path.basename(full).startsWith("character-")||!/\.(png|jpe?g|webp)$/i.test(full))throw Error("Ảnh không nằm trong thư mục ảnh nhân vật đã tạo.");
+ const st=await fsp.stat(full);
+ if(st.size>24*1024*1024)throw Error("Ảnh quá lớn để hiển thị.");
+ const buf=await fsp.readFile(full);
+ const mime=full.endsWith(".webp")?"image/webp":/\.jpe?g$/i.test(full)?"image/jpeg":"image/png";
+ return "data:"+mime+";base64,"+buf.toString("base64");
+});
 ipcMain.handle("flow:character:create",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output()),c=ws.character;await requireOpenedGflowProject(ws);const state=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);if(!c.name.trim()||!c.prompt.trim())throw Error("Nhập tên và mô tả nhân vật trước khi tạo.");if(c.referenceImages.length>2)throw Error("Google Flow chỉ hỗ trợ 1–2 ảnh tham chiếu khi tạo Character. Vui lòng bớt ảnh.");for(const image of c.referenceImages){if(!path.isAbsolute(image)||!fs.existsSync(image))throw Error("Ảnh tham chiếu không tồn tại: "+image);}log("GFlow: mở dự án và tạo Character \""+c.name+"\" bằng prompt và "+c.referenceImages.length+" ảnh tham chiếu.");const args=["character","create","--name",c.name,"--prompt",c.prompt,"--out",ws.outputDir,...flags(ws)];if(c.description)args.push("--description",c.description);if(c.voice)args.push("--voice",c.voice);if(c.referenceImages.length)args.push("--image",...c.referenceImages);const created=await cmd(args,1200000,ws.chromePath,ws.project);log("Xác minh nhân vật đã xuất hiện trong Google Flow...");const names=await cmd(["character","list",...flags(ws)],120000,ws.chromePath,ws.project);const found=names.split(/\r?\n/).some(line=>line.trim().toLocaleLowerCase()===c.name.trim().toLocaleLowerCase());if(!found)throw Error("GFlow CLI báo xong nhưng không thấy nhân vật \""+c.name+"\" trong danh sách Google Flow. Có thể Flow đã đổi giao diện hoặc chưa tạo thành công. Mở Google Flow kiểm tra project/Characters; không tiếp tục tạo video để tránh sai nhân vật.");return created+"\nĐã xác minh nhân vật: "+c.name;});
 ipcMain.handle("flow:character:list",(_,x)=>{idle();return cmd(["character","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
 ipcMain.handle("flow:media:list",(_,x)=>{idle();return cmd(["media","list",...flags(w.normalizeWorkspace(x?.workspace||workspace(),output()))],120000);});
@@ -162,7 +214,7 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
     active=null;emit({kind:"run",running:false});
   }
 });
-ipcMain.handle("flow:run",(_,x)=>run(x));ipcMain.handle("flow:stop",()=>{if(!active)return false;active.cancelled=true;active.child?.kill();log("Đã yêu cầu dừng.");return true;});
+ipcMain.handle("flow:run",(_,x)=>run(x));ipcMain.handle("flow:stop",()=>{if(!active)return false;active.cancelled=true;active.controller?.abort();active.child?.kill();log("Đã yêu cầu dừng.");return true;});
 ipcMain.handle("flow:sdkDoctor",()=>sdkDoctor());ipcMain.handle("flow:sdkProjects",()=>{idle();return sdkProjects();});
 ipcMain.handle("flow:sdkCreateProject",async(_,x)=>{idle();const c=sdk(true);try{return await c.createProject({title:String(x?.title||"Dự án video").slice(0,120)});}finally{await c.disconnect().catch(()=>{});}});
 ipcMain.handle("dialog:pickChrome",async()=>{const r=await dialog.showOpenDialog(win,{title:"Chọn Chrome executable",properties:["openFile"],filters:[{name:"Google Chrome",extensions:["exe"]}]});return r.canceled?null:r.filePaths[0];});
