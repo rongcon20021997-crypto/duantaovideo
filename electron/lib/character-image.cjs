@@ -101,9 +101,10 @@ async function uploadReference(page,filepath,log,signal){
  checkStopped(signal);
  const starting=await snapshot(page);
  const add=await visibleOne(page.getByRole("button",{name:ADD}).or(page.locator('button[aria-haspopup="dialog"]').filter({hasText:ADD})));
- if(!add)throw Error("Không thấy nút Add Image/Thêm ảnh của Google Flow để đưa ảnh mẫu vào prompt.");
+ if(!add&&!(await page.locator(FILES).count()))throw Error("Không thấy nút Add Image hoặc input upload ảnh của Google Flow.");
  log("Đưa ảnh mẫu vào Google Flow: "+path.basename(filepath));
- const uploadType=await invokeUpload(page,add,filepath);
+ const uploadType=add?await invokeUpload(page,add,filepath):"direct-input";
+ if(uploadType==="direct-input")await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
  if(uploadType==="picker"){
    const scope=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]'))||page;
    const upload=await visibleOne(scope.getByRole("button",{name:UPLOAD}).or(scope.getByText(UPLOAD)));
@@ -119,7 +120,7 @@ async function uploadReference(page,filepath,log,signal){
  await page.waitForTimeout(1000);
  // New uploads are often selected automatically, and the picker needs confirmation.
  let confirmed=false;
- for(let attempt=0;attempt<12;attempt++){
+ for(let attempt=0;attempt<40;attempt++){
    checkStopped(signal);
    const dialog=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]'));
    const candidate=dialog?await visibleOne(dialog.getByRole("button",{name:CONFIRM}).or(dialog.getByText(CONFIRM))):null;
