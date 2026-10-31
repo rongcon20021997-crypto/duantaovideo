@@ -10,9 +10,9 @@ const {pickUploadTrigger,pickPickerUploadButton,examineUploadControls}=require("
 
 const INPUTS='[role="textbox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea:visible';
 const FILES='input[type="file"]';
-const UPLOAD=/upload (image|media|file)|tải (ảnh|tệp|lên)|chọn tệp|choose (file|image)/i;
+const UPLOAD=/tải nội dung nghe nhìn lên|upload (image|media|file)|upload from|tải (ảnh|tệp|lên)|chọn tệp|choose (file|image)/i;
 const ADD=/add image|add media|thêm ảnh|thêm hình|add_2/i;
-const CONFIRM=/add to prompt|use (image|media|selected)|thêm vào lời nhắc|thêm vào prompt|add selected/i;
+const CONFIRM=/add to prompt|use (image|media|selected)|thêm vào (?:ô nhập )?câu lệnh|thêm vào lời nhắc|thêm vào prompt|add selected/i;
 const CREATE=/generate image|tạo ảnh|tạo hình/i;
 const MODEL=/nano banana|imagen|veo/i;
 const PREFERRED_TIMEOUT=360000;
@@ -85,19 +85,28 @@ async function chooseImageMode(page,log){
  }
  return composer;
 }
-async function invokeUpload(page,button,filepath){
- const chooserPromise=page.waitForEvent("filechooser",{timeout:2200}).catch(()=>null);
+async function invokeUpload(page,button,filepath,{finalAction=false,log=()=>{}}={}){
+ // Set up the chooser listener BEFORE the trusted DOM click. For Google Flow
+ // Vietnamese, the final click must be the footer "Tải nội dung nghe nhìn lên".
+ const chooserPromise=page.waitForEvent("filechooser",{timeout:finalAction?12000:2500}).catch(()=>null);
  await button.click({timeout:7000});
- let chooser=await chooserPromise;
- if(chooser){await chooser.setFiles(filepath);return "filechooser";}
- // Some Flow versions render a hidden file input instead of opening OS chooser.
- const input=page.locator(FILES).last();
- if(await input.count()){
-  await input.setInputFiles(filepath,{timeout:10000});
+ const chooser=await chooserPromise;
+ if(chooser){
+  await chooser.setFiles(filepath,{timeout:15000});
+  log("Đã chọn ảnh mẫu trong trình chọn file của Chrome.");
+  return "filechooser";
+ }
+ // Some Flow builds create an <input type=file> without raising filechooser.
+ const inputs=page.locator(FILES);
+ const count=await inputs.count().catch(()=>0);
+ if(count){
+  await inputs.last().setInputFiles(filepath,{timeout:15000});
+  log("Đã đưa ảnh mẫu vào file input của Flow.");
   return "file-input";
  }
  return "picker";
 }
+
 async function uploadReference(page,filepath,log,signal){
  checkStopped(signal);
  const starting=await snapshot(page);
@@ -112,18 +121,26 @@ async function uploadReference(page,filepath,log,signal){
  if(!add&&!(await page.locator(FILES).count()))throw Error("Không tìm thấy nút thêm ảnh cạnh ô prompt. Danh sách nút đã ghi trong Nhật ký và báo cáo chẩn đoán.");
 
  log("Đưa ảnh mẫu vào Google Flow: "+path.basename(filepath));
- const uploadType=add?await invokeUpload(page,add,filepath):"direct-input";
- if(uploadType==="direct-input")await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
+ const uploadType=add?await invokeUpload(page,add,filepath,{log}):"direct-input";
+ if(uploadType==="direct-input"){
+   await page.locator(FILES).last().setInputFiles(filepath,{timeout:12000});
+   log("Đã nhập file qua input có sẵn trong Flow.");
+ }
  if(uploadType==="picker"){
-   const scope=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"]'))||page;
-   const upload=await visibleOne(scope.getByRole("button",{name:UPLOAD}).or(scope.getByText(UPLOAD)))||await pickPickerUploadButton(page,log);
+   // The user's real Google Flow UI shows this exact footer action (VN):
+   // "upload Tải nội dung nghe nhìn lên". Do NOT click "Tệp tải lên",
+   // which is only the asset-library filter.
+   const upload=await pickPickerUploadButton(page,log);
    if(!upload){
      const fileinput=page.locator(FILES).last();
-     if(await fileinput.count())await fileinput.setInputFiles(filepath,{timeout:10000});
-     else throw Error("Đã mở Add Image nhưng không tìm thấy Upload Media / input chọn file.");
+     if(await fileinput.count()){
+       await fileinput.setInputFiles(filepath,{timeout:10000});
+       log("Đã upload ảnh bằng input file trong cửa sổ media.");
+     }else throw Error("Hộp media đang mở nhưng không tìm thấy mục 'Tải nội dung nghe nhìn lên'.");
    }else{
-     const actual=await invokeUpload(page,upload,filepath);
-     if(actual==="picker")throw Error("Google Flow không mở được trình chọn ảnh mẫu sau Upload Media.");
+     log("Đang bấm Tải nội dung nghe nhìn lên để chọn ảnh trên máy.");
+     const actual=await invokeUpload(page,upload,filepath,{finalAction:true,log});
+     if(actual==="picker")throw Error("Đã bấm 'Tải nội dung nghe nhìn lên' nhưng Chrome không phát sinh filechooser hay input[type=file]. Kiểm tra ảnh và báo cáo DOM trong diagnostics.");
    }
  }
  await page.waitForTimeout(1000);

@@ -70,7 +70,23 @@ async function pickUploadTrigger(page,log=()=>{}){
  return target;
 }
 
+
+// Real Flow locale (Vietnamese): the upload button in the opened asset picker
+// is literally "upload Tải nội dung nghe nhìn lên". The "Tệp tải lên" sidebar
+// item is a FILTER, not the OS-file upload action.
+const EXACT_UPLOAD=/tải nội dung nghe nhìn lên|upload (?:media|image|file|from computer)|upload files?|tải (?:ảnh|hình) lên/i;
+function isPickerUploadAction(item){
+ const combined=[item?.text,item?.aria,item?.title,item?.icon].filter(Boolean).join(" ");
+ return EXACT_UPLOAD.test(combined) || /(?:upload_file|file_upload|cloud_upload)/i.test(combined);
+}
+async function visibleUploadAction(page){
+ const direct=page.getByRole("button",{name:EXACT_UPLOAD})
+    .or(page.locator('button,[role="button"],[role="menuitem"]').filter({hasText:EXACT_UPLOAD}));
+ return visibleOne(direct);
+}
 async function pickPickerUploadButton(page,log=()=>{}){
+ const actual=await visibleUploadAction(page);
+ if(actual){log("Đã tìm thấy chính xác nút Tải nội dung nghe nhìn lên của Google Flow.");return actual;}
  const scope=await visibleOne(page.locator('[role="dialog"],[aria-modal="true"],[role="menu"]'))||page;
  const locator=scope.locator(SELECTOR);
  const controls=await locator.evaluateAll(elements=>elements.map(el=>{
@@ -84,9 +100,7 @@ async function pickPickerUploadButton(page,log=()=>{}){
     icon,visible:r.width>0&&r.height>0&&style.visibility!=="hidden"&&style.display!=="none",
     popup:!!el.getAttribute("aria-haspopup"),near:true,insideComposer:true};
  }));
- const matches=rankUploadControls(controls).filter(c=>
-    /upload|tải|chọn (?:tệp|ảnh)|browse|choose (?:file|image)|computer|device|upload_file|file_upload|cloud_upload/i.test(
-    [c.text,c.aria,c.title,c.icon].join(" ")));
+ const matches=rankUploadControls(controls).filter(isPickerUploadAction);
  if(!matches.length){
    log("Các mục trong hộp thoại chọn ảnh: "+controls.filter(c=>c.visible).slice(0,18).map(c=>
      (c.aria||c.text||c.title||c.icon||"?").slice(0,40)).join(" | "));
@@ -98,4 +112,4 @@ async function pickPickerUploadButton(page,log=()=>{}){
  return found;
 }
 
-module.exports={scoreUploadControl,rankUploadControls,examineUploadControls,pickUploadTrigger,pickPickerUploadButton};
+module.exports={scoreUploadControl,rankUploadControls,examineUploadControls,pickUploadTrigger,pickPickerUploadButton,isPickerUploadAction,EXACT_UPLOAD};
