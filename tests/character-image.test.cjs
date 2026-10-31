@@ -36,3 +36,11 @@ test("image signature detection rejects html and uses PNG/JPEG/WebP",()=>{
  assert.equal(imageExtension("",Buffer.from("RIFFxxxxWEBPxxxxx")), ".webp");
  assert.throws(()=>imageExtension("text/html",Buffer.from("<html>")),/không phải tệp ảnh/);
 });
+
+test("reference image generator supports a frame prefix and fixes filename click matching",()=>{
+ const s=fs.readFileSync(path.join(__dirname,"..","electron","lib","character-image.cjs"),"utf8");
+ assert.match(s,/outputPrefix="character"/);
+ assert.match(s,/String\(outputPrefix\|\|"character"\)\+"-"\+id/);
+ assert.match(s,/page.getByText\(prefix,\{exact:false\}\)/);
+ assert.doesNotMatch(s,/new RegExp\(prefix\.replace/);
+});

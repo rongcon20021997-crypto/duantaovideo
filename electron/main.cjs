@@ -7,6 +7,7 @@ const {imageCommand}=require("./lib/image.cjs");
 const flowProject=require("./lib/project.cjs");
 const {inspectFlowUi}=require("./lib/flow-diagnostics.cjs");
 const {runCharacterImage}=require("./lib/character-image.cjs");
+const {resolveSceneReferences}=require("./lib/scene-references.cjs");
 let win=null,active=null;
 const root=()=>app.getPath("userData"),output=()=>path.join(app.getPath("videos"),"DuAnTaoVideo");
 const read=(name,def={})=>{try{return JSON.parse(fs.readFileSync(path.join(root(),name),"utf8"));}catch{return def;}};
@@ -70,13 +71,44 @@ function sdk(autoLaunch=false){const raw=require("google-flow-cli"),FlowClient=r
 async function sdkDoctor(){const c=sdk(false);try{return await c.doctor();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkProjects(){const c=sdk(true);try{return await c.listProjects();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkVideo(ws,scene,i,dir){const c=sdk(true);try{const p=path.join(dir,w.safeJobId("sdk-"+i+"-"+scene.id)+".mp4");const r=await c.runScene({mediaType:"video",model:ws.videoModel==="Omni Flash"?"Veo 3.1 - Fast":ws.videoModel,duration:String(scene.duration)+"s",aspect:ws.ratio,prompt:scene.prompt,generate:true,wait:true,timeout:1200,output:p});if(r.status!=="completed")throw Error("SDK chưa xác nhận video hoàn tất.");return r.download?.path||p;}finally{await c.disconnect().catch(()=>{});}}
+
+async function createFrameWithReferences(ws,scenePrompt,id,dir,state,label="phân cảnh"){
+ const resolved=resolveSceneReferences(ws);
+ if(!resolved.files.length)return null; // Explicitly disabled by user.
+ const chromeState=await chrome.inspect({userDataDir:root(),profile:ws.profile,chromePath:ws.chromePath});
+ const tip=chrome.guidance(chromeState);if(tip)throw Error(tip);
+ if(!chromeState.debuggingReady)throw Error("Chrome GFlow chưa có cổng CDP. Bấm GFlow Doctor và mở sẵn project trước khi tạo ảnh.");
+ if(state?.cancelled)throw Error("Đã dừng tạo ảnh.");
+ log("ẢNH MẪU "+label+": "+resolved.source+" | "+resolved.files.map(file=>path.basename(file)).join(" + "));
+ log("Đang gắn ảnh mẫu vào câu lệnh trên Google Flow trước khi tạo hình cảnh.");
+ const generated=await runCharacterImage({
+  port:chromeState.debugPort,project:ws.project,referenceImages:resolved.files,
+  prompt:scenePrompt,id,outputPrefix:"frame",outDir:dir,cliPath:cliPath(),
+  signal:state?.controller?.signal,log:msg=>log("ẢNH CẢNH: "+msg)
+ });
+ if(state?.cancelled)throw Error("Đã dừng tạo ảnh.");
+ return generated.image;
+}
+
 async function run(input){idle();const useSavedCharacter=input?.useSavedCharacter===true;const ws=w.normalizeWorkspace(input,output());if(!ws.scenes.length)throw Error("Chưa có phân cảnh.");if(ws.engine==="gflow")await requireOpenedGflowProject(ws);
-const state={cancelled:false,child:null};active=state;const dir=path.resolve(ws.outputDir);await fsp.mkdir(dir,{recursive:true});emit({kind:"run",running:true});
+const state={cancelled:false,child:null,controller:new AbortController()};active=state;const dir=path.resolve(ws.outputDir);await fsp.mkdir(dir,{recursive:true});emit({kind:"run",running:true});
 try{if(ws.engine==="gflow" && useSavedCharacter && ws.character.name){log("Kiểm tra nhân vật đã được lưu trong Flow...");const names=await cmd(["character","list",...flags(ws)],120000,ws.chromePath,ws.project);if(!names.toLowerCase().includes(ws.character.name.toLowerCase()))throw Error("Không tìm thấy nhân vật "+ws.character.name+" trên Google Flow. Vào tab Nhân vật tạo hoặc chọn tên nhân vật đang tồn tại trước khi chạy.");}for(let i=0;i<ws.scenes.length;i++){const scene=ws.scenes[i];if(state.cancelled)break;if(scene.status==="completed"&&scene.video&&fs.existsSync(scene.video)){log("Bỏ qua cảnh đã hoàn thành: "+scene.title);continue;}
 scene.status="generating";scene.error=undefined;emit({kind:"scene",sceneId:scene.id,status:"generating"});log("Cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
 try{if(ws.engine==="sdk"){scene.video=await sdkVideo(ws,scene,i+1,dir);}
 else{
-if(ws.prepareImages&&scene.imagePrompt&&!(scene.image&&fs.existsSync(scene.image))){const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id);const args=["image","--id",id,"--prompt",scene.imagePrompt,"--model",ws.imageModel,"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];if(useSavedCharacter&&ws.character.name)args.push("--character",ws.character.name);log("GFlow ảnh cảnh "+(i+1)+": chuẩn bị gửi prompt và chờ tạo.");await cmd(args,1800000,ws.chromePath,ws.project);scene.image=artifact(dir,id,[".png",".jpg",".jpeg",".webp"]);emit({kind:"scene",sceneId:scene.id,status:"generating",image:scene.image});}
+if(ws.prepareImages&&scene.imagePrompt&&!(scene.image&&fs.existsSync(scene.image))){
+ const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id);
+ if(ws.useSceneReferences!==false){
+  scene.image=await createFrameWithReferences(ws,scene.imagePrompt,id,dir,state,"cảnh "+(i+1));
+ }else{
+  log("Cảnh "+(i+1)+": bạn đã tắt dùng ảnh mẫu; tạo ảnh bằng prompt.");
+  const args=["image","--id",id,"--prompt",scene.imagePrompt,"--model",ws.imageModel,"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];
+  if(useSavedCharacter&&ws.character.name)args.push("--character",ws.character.name);
+  await cmd(args,1800000,ws.chromePath,ws.project);
+  scene.image=artifact(dir,id,[".png",".jpg",".jpeg",".webp"]);
+ }
+ emit({kind:"scene",sceneId:scene.id,status:"generating",image:scene.image});
+}
 if(scene.image&&fs.existsSync(scene.image))log("Cảnh "+(i+1)+": sử dụng ảnh keyframe có sẵn "+path.basename(scene.image));
 if(state.cancelled)throw Error("Hàng đợi đã được hủy.");
 const id=w.safeJobId("clip-"+(i+1)+"-"+scene.id);const args=["video","--id",id,"--prompt",scene.prompt,"--model",ws.videoModel,"--duration",String(scene.duration),"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];
@@ -193,15 +225,21 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
   log("Kết quả kiểm tra: "+inspection.reason+(inspection.submitLabels.length?" | Nút: "+inspection.submitLabels.join(", "):""));
   if(!inspection.prompts)throw Error("Không thể tạo ảnh: "+inspection.reason+" Ảnh chụp kiểm tra: "+(inspection.screenshot||"không chụp được")+". Trang Flow đã đổi hoặc bạn chưa ở màn hình trình chỉnh sửa.");
   if(!inspection.ready)log("Lưu ý: Chưa phát hiện nút Generate Image trước khi điền prompt. Sẽ kiểm tra lại khi gửi lệnh.");
-  active={cancelled:false,child:null};
+  active={cancelled:false,child:null,controller:new AbortController()};
   emit({kind:"run",running:true});
   try{
     log("BẮT ĐẦU TẠO ẢNH: "+(scene?scene.title:"nhân vật")+" | "+ws.imageModel);
     log("Project: "+ws.project+" | Profile: "+ws.profile+" | Lưu: "+job.dir);
     if(scene)emit({kind:"scene",sceneId:scene.id,status:"generating"});
-    await cmd(job.args,15*60*1000,ws.chromePath,ws.project);
+    let file;
+    if(target==="scene"&&ws.useSceneReferences!==false){
+      file=await createFrameWithReferences(ws,prompt,job.id,job.dir,active,scene.title);
+    }else{
+      if(target==="scene")log("Bạn đã tắt Dùng ảnh nhân vật làm mẫu, tạo ảnh chỉ từ prompt.");
+      await cmd(job.args,15*60*1000,ws.chromePath,ws.project);
+      file=artifact(job.dir,job.id,[".png",".jpg",".jpeg",".webp"]);
+    }
     if(active.cancelled)throw new Error("Đã hủy tác vụ tạo ảnh.");
-    const file=artifact(job.dir,job.id,[".png",".jpg",".jpeg",".webp"]);
     if(scene){scene.image=file;scene.error=undefined;scene.status="pending";}
     else ws.character.thumbnail=file;
     await save(ws);

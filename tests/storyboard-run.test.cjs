@@ -17,3 +17,20 @@ test("storyboard reuses an already generated image as video start frame",()=>{
  assert.match(run,/--start-frame",scene.image/);
  assert.match(run,/GFlow video cảnh/);
 });
+
+test("manual scene-image generation attaches the character sample using the direct browser path",()=>{
+ const h=backend.slice(backend.indexOf('ipcMain.handle("flow:image:create"'),backend.indexOf('ipcMain.handle("flow:run"'));
+ assert.match(h,/target==="scene"&&ws.useSceneReferences!==false/);
+ assert.match(h,/createFrameWithReferences\(ws,prompt,job.id/);
+ assert.match(h,/let file;/);
+});
+test("full storyboard image generation uses the character reference before making video",()=>{
+ const run=backend.slice(backend.indexOf("async function run(input)"),backend.indexOf("async function story"));
+ assert.match(run,/ws.useSceneReferences!==false/);
+ assert.match(run,/scene.image=await createFrameWithReferences\(ws,scene.imagePrompt/);
+ assert.match(run,/--start-frame",scene.image/);
+ assert.match(backend,/const resolved=resolveSceneReferences\(ws\)/);
+ assert.match(backend,/runCharacterImage\(\{/);
+ assert.match(renderer,/Tự dùng ảnh nhân vật làm mẫu cho ảnh từng cảnh/);
+ assert.match(renderer,/Ảnh mẫu hiện dùng:/);
+});

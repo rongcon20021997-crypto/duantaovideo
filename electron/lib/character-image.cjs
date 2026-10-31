@@ -175,8 +175,7 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
      // Uploaded asset is visible but not selected; click its exact label
      // using a DOM-based locator, not a screen coordinate.
      const prefix=filenameSearchPrefix(filepath);
-     const re=new RegExp(prefix.replace(/[|\\{}()[\]^$+*?.]/g,"\\  const current=await inspectMediaCards(page);"),"i");
-     const asset=page.getByText(re).first();
+     const asset=page.getByText(prefix,{exact:false}).first();
      if(await asset.isVisible().catch(()=>false)){
       log("Ảnh mẫu đã lên thư viện, đang chọn theo tên tệp.");
       await asset.click({timeout:5000}).catch(()=>undefined);
@@ -373,7 +372,7 @@ async function captureFailure(page,outDir,log){
   return file;
  }catch{return null;}
 }
-async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,cliPath,signal,log=()=>{}},deps={}){
+async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,outputPrefix="character",cliPath,signal,log=()=>{}},deps={}){
  const files=validateFiles(referenceImages);
  if(!String(prompt||"").trim())throw Error("Chưa nhập prompt mô tả nhân vật.");
  if(!Number.isInteger(port)||port<1||port>65535)throw Error("Không tìm thấy Chrome GFlow debug port.");
@@ -399,7 +398,7 @@ async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,
   checkStopped(signal);
   await submit(page,log);
   const src=await waitResult(page,before,signal,log);
-  const saved=await downloadImage(page,src,outDir,"character-"+id);
+  const saved=await downloadImage(page,src,outDir,String(outputPrefix||"character")+"-"+id);
   log("Đã tải ảnh nhân vật về app: "+saved);
   return {image:saved,project:projectUrl(page.url()),referenceCount:files.length};
  }catch(e){

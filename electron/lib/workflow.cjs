@@ -26,6 +26,7 @@ function normalizeWorkspace(input = {}, fallbackDir) {
  imageModel: IMAGE_MODELS.includes(input.imageModel) ? input.imageModel : "Nano Banana Pro",
  videoModel: VIDEO_MODELS.includes(input.videoModel) ? input.videoModel : "Veo 3.1 - Fast",
  prepareImages: input.prepareImages !== false,
+ useSceneReferences: input.useSceneReferences !== false,
  character: { name: safeText(character.name,"Alex").slice(0,70), prompt: safeText(character.prompt,"Người dẫn chương trình nấu ăn nam, 28 tuổi, khuôn mặt cố định, mặc áo đầu bếp, mang găng tay sạch"), description: safeText(character.description,"Tự nhiên, vui vẻ, hướng dẫn chi tiết"), voice: safeText(character.voice).slice(0,80), referenceImages: Array.isArray(character.referenceImages) ? character.referenceImages.filter(x=>typeof x==="string").slice(0,2) : [], ...(character.thumbnail ? {thumbnail: character.thumbnail}: {}) },
  scenes: Array.isArray(input.scenes) ? input.scenes.slice(0,40).map(normalizeScene) : []
  };
