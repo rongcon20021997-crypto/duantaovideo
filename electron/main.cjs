@@ -161,9 +161,31 @@ ipcMain.handle("workspace:get",()=>workspace());
 ipcMain.handle("workspace:save",(_,x)=>{idle();return save(x);});
 ipcMain.handle("settings:get",()=>settings());ipcMain.handle("settings:save",(_,x)=>saveSettings(x));
 ipcMain.handle("story:generate",(_,x)=>story(x));
-ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000,x?.chromePath);});
+function chromeOptions(x){
+ const stored=workspace();
+ return {userDataDir:root(),profile:x?.profile||stored.profile||"default",chromePath:x?.chromePath||stored.chromePath};
+}
+ipcMain.handle("flow:auth",async(_,x)=>{
+ idle();
+ const state=await chrome.ensureDebugging(chromeOptions(x));
+ return "Chrome GFlow đã sẵn sàng với CDP port "+state.debugPort+" (profile "+(x?.profile||workspace().profile||"default")+"). Đăng nhập Google trực tiếp trong Chrome vừa mở nếu cần, sau đó mở project và bấm Dò project.";
+});
+ipcMain.handle("flow:chrome:start",async(_,x)=>{
+ idle();
+ const state=await chrome.ensureDebugging(chromeOptions(x));
+ return {ready:state.debuggingReady,launched:state.launched,debugPort:state.debugPort,profileDir:state.profileDir};
+});
+ipcMain.handle("flow:chrome:list",async(_,x)=>{
+ idle();
+ return chrome.listChromeSessions(chromeOptions(x));
+});
 ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
-ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
+ipcMain.handle("flow:doctor",async(_,x)=>{
+ idle();
+ const options=chromeOptions(x),state=await chrome.ensureDebugging(options);
+ log("Chrome GFlow đã sẵn sàng: "+state.profileDir+" | CDP: "+state.debugPort);
+ return cmd(["doctor","--profile",options.profile],120000,options.chromePath);
+});
 ipcMain.handle("flow:diagnose",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());await requireOpenedGflowProject(ws);const result=await diagnoseOpenFlow(ws,true);log("Chẩn đoán giao diện Flow: "+result.reason+" | "+(result.screenshot||result.jsonPath||"không có ảnh chụp"));return result;});
 ipcMain.handle("flow:extension:status",async(_,x)=>{
  idle();
