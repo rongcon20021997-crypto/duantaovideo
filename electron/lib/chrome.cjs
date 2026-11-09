@@ -16,6 +16,9 @@ function resolveChromeExecutable(options = {}) {
   const exists = options.exists || fs.existsSync;
   const explicit = normalizeCandidate(options.chromePath || env.GFLOW_CHROME_PATH);
   if (explicit) {
+    if (platform === "win32" && path.win32.basename(explicit).toLowerCase() !== "chrome.exe") {
+      throw new Error("Hãy chọn Google Chrome (chrome.exe), không phải Edge, Chromium hoặc trình duyệt khác.");
+    }
     if (!exists(explicit)) {
       throw new Error("Không tìm thấy chrome.exe tại: " + explicit + ". Chọn đúng Chrome executable trong Cài đặt → Đường dẫn Chrome.");
     }
@@ -48,13 +51,34 @@ function readPort(dir) {
     return Number.isInteger(num) && num > 0 && num < 65536 ? num : null;
   } catch { return null; }
 }
-async function portReachable(port) {
+function readDebuggerEndpoint(dir) {
+  try {
+    const lines = fs.readFileSync(path.join(dir, "DevToolsActivePort"), "utf8").split(/\r?\n/);
+    const endpoint = (lines[1] || "").trim();
+    return /^\/devtools\/browser\/[a-z0-9-]+$/i.test(endpoint) ? endpoint : null;
+  } catch { return null; }
+}
+async function portReachable(port, expectedEndpoint) {
   if (!port) return false;
   return await new Promise(resolve => {
     let done = false;
     const finish = value => { if (!done) { done=true; resolve(value); } };
     const req = http.get({hostname:"127.0.0.1",port,path:"/json/version",timeout:1200},res=>{
-      res.resume();finish(res.statusCode === 200);
+      if(res.statusCode !== 200){res.resume();return finish(false);}
+      let body="";
+      res.on("data",chunk=>{body+=String(chunk);if(body.length>16384)req.destroy();});
+      res.on("end",()=>{
+        try {
+          const data=JSON.parse(body);
+          if(!/^Chrome\//.test(String(data.Browser||"")))return finish(false);
+          if(expectedEndpoint){
+            const actual=new URL(String(data.webSocketDebuggerUrl||"")).pathname;
+            return finish(actual===expectedEndpoint);
+          }
+          finish(true);
+        } catch { finish(false); }
+      });
+      res.on("error",()=>finish(false));
     });
     req.on("error",()=>finish(false));
     req.on("timeout",()=>{req.destroy();finish(false);});
@@ -83,7 +107,10 @@ async function inspect(options = {}) {
   const executable = resolveChromeExecutable({chromePath:options.chromePath,platform,env:options.env,exists:options.exists});
   const dir = profileDir(options.userDataDir, options.profile || "default");
   const port = readPort(dir);
-  const debuggingReady = await portReachable(port);
+  // A stale DevToolsActivePort may point to ANOTHER Chrome/profile.
+  // Compare the browser websocket identity saved by THIS GFlow profile.
+  const endpoint = readDebuggerEndpoint(dir);
+  const debuggingReady = Boolean(endpoint) && await portReachable(port, endpoint);
   const processes = !debuggingReady ? await windowsProfileProcesses(dir,{platform,exec:options.exec}) : [];
   return {
     executable: executable || null,
@@ -108,4 +135,4 @@ function guidance(state) {
   }
   return null;
 }
-module.exports={resolveChromeExecutable,profileDir,readPort,portReachable,windowsProfileProcesses,inspect,guidance};
+module.exports={resolveChromeExecutable,profileDir,readPort,readDebuggerEndpoint,portReachable,windowsProfileProcesses,inspect,guidance};
