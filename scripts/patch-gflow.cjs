@@ -176,14 +176,14 @@ function patchFlowFramesAndResults(source) {
             .or(this.page.locator("button").filter({ hasText: slot === "Start" ? /^(?:Start|Bắt đầu)$/i : /^(?:End|Kết thúc)$/i }))
             .or(this.page.getByText(slot, { exact: true }))
             .first();
-        if ((await slotEl.count()) === 0)
-            return;
-        await slotEl.click().catch(() => undefined);
+        if (!(await slotEl.count()))
+            throw new Error("GFlow: không tìm thấy khung hình " + slot + ". Đã dừng để tránh tạo video sai ảnh.");
+        await slotEl.click({ timeout: 8000 });
         await this.page.waitForTimeout(600);
         const dialog = this.page.locator(".cdk-overlay-container, [role=dialog], [aria-modal=true]").first();
-        await dialog.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
+        await dialog.waitFor({ state: "visible", timeout: 10000 }).catch(() => { throw new Error("GFlow: không mở được bộ chọn ảnh khung hình " + slot); });
         const uploadButton = dialog.locator("button").filter({ hasText: /upload media|tải nội dung/i }).first();
-        if (!(await uploadButton.count())) return;
+        if (!(await uploadButton.count())) throw new Error("GFlow: không tìm thấy nút upload khung hình " + slot + ". Không gửi video thiếu ảnh.");
         const [chooser] = await Promise.all([
             this.page.waitForEvent("filechooser", { timeout: 15000 }),
             uploadButton.click()
@@ -194,15 +194,13 @@ function patchFlowFramesAndResults(source) {
             const agree = this.page.getByRole("button", { name: /tôi đồng ý|đồng ý|i agree|agree/i }).first();
             if (await agree.isVisible().catch(() => false)) await agree.click().catch(() => undefined);
         }
-        const confirm = dialog.locator("button").filter({ hasText: /add to (?:prompt|scene|character)|thêm vào câu lệnh/i }).first();
-        for (let i = 0; i < 30; i++) {
-            if (await confirm.isEnabled().catch(() => false)) {
-                await confirm.click().catch(() => undefined);
-                break;
-            }
-            await this.page.waitForTimeout(500);
-        }
-        await this.page.keyboard.press("Escape").catch(() => undefined);
+        const confirm = dialog.locator("button").filter({ hasText: /add to (?:prompt|scene|character)|thêm vào (?:ô nhập )?câu lệnh/i }).first();
+        await confirm.waitFor({state:"visible",timeout:15000}).catch(() => { throw new Error("GFlow: chưa tìm thấy nút xác nhận khung hình " + slot); });
+        await confirm.waitFor({state:"attached",timeout:10000});
+        for(let i=0;i<60&&!await confirm.isEnabled().catch(()=>false);i++) await this.page.waitForTimeout(500);
+        if(!await confirm.isEnabled().catch(()=>false)) throw new Error("GFlow: ảnh khung hình " + slot + " chưa upload xong.");
+        await confirm.click({timeout:12000});
+        await dialog.waitFor({state:"hidden",timeout:12000}).catch(() => { throw new Error("GFlow: bộ chọn chưa đóng sau khi gắn khung hình " + slot); });
     }
     `;
     source = source.slice(0, start) + replacement + source.slice(end);
