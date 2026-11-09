@@ -3,6 +3,8 @@ import {ReactFlow,Background,Controls,MiniMap,Handle,Position,useNodesState,Mark
 import {Clapperboard,Workflow,Users,Images,Settings2,Play,Square,Plus,Save,Sparkles,Check,AlertTriangle,LoaderCircle,FolderOpen,ExternalLink,RefreshCw,Trash2,Copy,Film,Image as ImageIcon,Terminal,Volume2,ChevronRight,ArrowRight,MonitorPlay,ShieldCheck,MoreHorizontal} from "lucide-react";
 import type {Workspace,Scene,StudioEvent,UserSettings} from "./types";
 type Tab="workflow"|"scenes"|"character"|"agent"|"media"|"settings";
+type ChromeSession = {profile:string;label:string;status:"ready"|"no-cdp"|"closed";debugPort:number|null;processCount:number};
+type ChromeSessionList = {sessions:ChromeSession[];externalChromeProcessCount:number|null;processInspectionAvailable:boolean};
 const sampleSteps=[
 ["Giới thiệu & hook","Chào các bạn! Hôm nay mình sẽ hướng dẫn các bạn làm món này siêu ngon và chuẩn vị nhé.","Món ăn thơm ngon trên đĩa trắng trong căn bếp sáng"],
 ["Nguyên liệu","Đây là toàn bộ nguyên liệu tươi ngon mà chúng ta cần chuẩn bị cho món ăn hôm nay.","Nguyên liệu trong tô thủy tinh trắng, góc quay top-down"],
@@ -33,6 +35,8 @@ function Labeled({label,children,hint}:{label:string;children:React.ReactNode;hi
 function App(){
  const [tab,setTab]=useState<Tab>("workflow"),[ws,setWs]=useState<Workspace>(defaultWorkspace),[settings,setSettings]=useState<UserSettings>({provider:"openai",model:"gpt-4o-mini",hasKey:false,keyStored:false}),[key,setKey]=useState("");
  const [projectCandidates,setProjectCandidates]=useState<string[]>([]);
+ const [chromeSessions,setChromeSessions]=useState<ChromeSession[]>([]);
+ const [otherChromeProcesses,setOtherChromeProcesses]=useState<number|null>(null);
  const [diagnosticShot,setDiagnosticShot]=useState("");
  const [characterPreview,setCharacterPreview]=useState("");
  const [ready,setReady]=useState(false),[busy,setBusy]=useState(""),[running,setRunning]=useState(false),[logs,setLogs]=useState<string[]>([]),[notice,setNotice]=useState(""),[error,setError]=useState("");
@@ -65,6 +69,19 @@ function App(){
  else{const scenes=mockScenes(topic,count);const next={...ws,scenes};setWs(next);setSelected(scenes[0]?.id||"");await request("template",()=>window.studio.invoke("workspace:save",next),()=>setNotice("Đã tạo "+scenes.length+" cảnh mẫu. Bạn có thể sửa prompt trước khi chạy."));}
  }
  async function run(){if(running||busy)return;await request("run",async()=>{const saved=await window.studio.invoke<Workspace>("workspace:save",ws);return window.studio.invoke<Workspace>("flow:run",{...saved,useSavedCharacter});},v=>{setWs(v);setNotice("Hàng đợi đã kết thúc. Xem trạng thái từng cảnh.");});}
+ async function refreshChromeSessions(){
+  await request("Tìm Chrome đang mở",()=>window.studio.invoke<ChromeSessionList>("flow:chrome:list",{profile:ws.profile,chromePath:ws.chromePath}),result=>{
+    setChromeSessions(result.sessions);
+    setOtherChromeProcesses(result.externalChromeProcessCount);
+    setNotice("Đã quét các profile Chrome GFlow. Chọn profile có CDP sẵn sàng hoặc mở phiên GFlow với CDP.");
+  });
+ }
+ async function openSelectedChrome(){
+  const result=await request("Mở Chrome CDP",()=>window.studio.invoke<{ready:boolean;launched:boolean;debugPort:number;profileDir:string}>("flow:chrome:start",{profile:ws.profile,chromePath:ws.chromePath}),state=>{
+    setNotice("Chrome GFlow profile "+ws.profile+" đã sẵn sàng (CDP "+state.debugPort+"). Mở project trong chính cửa sổ này rồi Dò project.");
+  });
+  if(result) await refreshChromeSessions();
+ }
  async function detectProject(){
   await request("Dò project Chrome GFlow",
     ()=>window.studio.invoke<{projects:string[];savedProject?:string;message:string;has404:boolean}>("flow:project:detect",{workspace:ws}),
@@ -193,6 +210,16 @@ function App(){
  <div className="panel extend-panel"><div className="panel-title"><Film size={19}/> Nối dài video bằng Scene Extend</div><p className="muted">Dùng trực tiếp tính năng Extend có sẵn của GFlow CLI. Lấy ID bằng nút “Xem media trên Flow”.</p><div className="two"><Labeled label="Media ID (bắt đầu timeline mới)"><input value={mediaId} onChange={e=>setMediaId(e.target.value)} placeholder="UUID video trên Flow"/></Labeled><Labeled label="Scene ID (tiếp tục timeline hiện tại)"><input value={sceneId} onChange={e=>setSceneId(e.target.value)} placeholder="UUID scene trên Flow"/></Labeled></div><Labeled label="Điều gì xảy ra tiếp theo?"><textarea value={extendPrompt} rows={3} onChange={e=>setExtendPrompt(e.target.value)}/></Labeled><button className="btn primary" disabled={disabled||!extendPrompt.trim()||(!mediaId.trim()&&!sceneId.trim())} onClick={()=>flowCmd("Extend video","flow:extend",{workspace:ws,mediaId,sceneId,prompt:extendPrompt})}><Play size={16}/> Extend & xuất video</button>{diagnostics&&<pre className="diagnostics">{diagnostics}</pre>}</div></>}
  {tab==="settings"&&<><div className="section-header"><div><div className="eyebrow">SYSTEM CONFIGURATION</div><h1>Thiết lập ứng dụng</h1><p>Cấu hình hai thư viện có sẵn, tài khoản Chrome và AI API dùng để viết kịch bản.</p></div></div><div className="setting-layout"><div className="panel"><div className="panel-title"><Workflow size={19}/> Google Flow Engine</div><Labeled label="Động cơ xử lý"><select value={ws.engine} onChange={e=>update({engine:e.target.value as Workspace["engine"]})}><option value="gflow">GFlow CLI — Characters + Images + Video (khuyên dùng)</option><option value="sdk">FlowClient SDK — tạo video, phiên Chrome riêng</option></select></Labeled><div className="tip"><AlertTriangle size={18}/> Engine SDK sử dụng Chrome CDP port 9222 / flow.google.com riêng và chưa có Character trong SDK; để giữ nhân vật nên dùng GFlow CLI.</div>
  <div className="two"><Labeled label="Chrome profile"><input value={ws.profile} onChange={e=>update({profile:e.target.value})}/></Labeled><Labeled label="Project Google Flow (lấy từ Chrome GFlow)" hint="Chỉ dùng project bạn đã tự mở thành công trong chính Chrome do GFlow Doctor điều khiển. Đường dẫn từ Chrome cá nhân có thể khác tài khoản."><input value={ws.project} onChange={e=>update({project:e.target.value})} placeholder="https://flow.google.com/project/..." /></Labeled></div>
+ <Labeled label="Chọn phiên Chrome GFlow đang mở" hint="Danh sách những profile Chrome do ứng dụng quản lý. Chrome cá nhân không có CDP không thể chọn để điều khiển trực tiếp.">
+ <div className="horizontal wrap">
+  <select className="grow" value={ws.profile} onChange={e=>{const profile=e.target.value;setWs(current=>({...current,profile,project:current.profile===profile?current.project:""}));setNotice("Đã chọn Chrome GFlow profile "+profile+". Bấm Lưu dự án để lưu lựa chọn. Dò lại project nếu đổi profile.");}}>
+   {chromeSessions.length?chromeSessions.map(session=><option key={session.profile} value={session.profile}>{session.label} — {session.status==="ready"?"CDP sẵn sàng:"+session.debugPort:session.status==="no-cdp"?"Đang mở, thiếu CDP":"Chưa mở"}</option>):<option value={ws.profile}>Chrome GFlow — {ws.profile} (bấm Quét Chrome)</option>}
+  </select>
+  <button className="btn subtle" type="button" disabled={disabled} onClick={refreshChromeSessions}><RefreshCw size={15}/> Quét Chrome</button>
+  <button className="btn subtle" type="button" disabled={disabled} onClick={openSelectedChrome}><ExternalLink size={15}/> Mở / kết nối CDP</button>
+ </div>
+ {otherChromeProcesses!==null&&otherChromeProcesses>0&&<small>Phát hiện {otherChromeProcesses} tiến trình Chrome ngoài các profile GFlow (không phải số cửa sổ). Không thể chọn Chrome thông thường nếu không được khởi động với CDP.</small>}
+ </Labeled>
  <div className="tip"><ShieldCheck size={18}/> Chế độ dùng tab đang mở: GFlow Doctor → mở project trong đúng Chrome GFlow → Dò project đang mở. Khi tạo ảnh, ứng dụng chỉ thao tác tại tab đó, không tải lại project hoặc tự tạo dự án. Chrome cá nhân thông thường không thể kết nối nếu chưa bật CDP.</div>
  <div className="tip"><ShieldCheck size={18}/> <strong>Extension nhận diện ảnh mẫu Flow:</strong> Cài một lần vào Chrome GFlow để lưu ID/nhận diện ảnh mẫu theo project. Khi tạo cảnh 2–6, app sẽ ưu tiên ID từ extension để chọn lại ảnh đã upload, không tự upload trùng. Mã local chỉ là fingerprint, không phải ID chính thức của Google.</div>
  <div className="horizontal wrap">
