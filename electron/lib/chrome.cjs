@@ -16,6 +16,9 @@ function resolveChromeExecutable(options = {}) {
   const exists = options.exists || fs.existsSync;
   const explicit = normalizeCandidate(options.chromePath || env.GFLOW_CHROME_PATH);
   if (explicit) {
+    if (platform === "win32" && path.win32.basename(explicit).toLowerCase() !== "chrome.exe") {
+      throw new Error("Hãy chọn Google Chrome (chrome.exe), không phải Edge, Chromium hoặc trình duyệt khác.");
+    }
     if (!exists(explicit)) {
       throw new Error("Không tìm thấy chrome.exe tại: " + explicit + ". Chọn đúng Chrome executable trong Cài đặt → Đường dẫn Chrome.");
     }
@@ -48,13 +51,34 @@ function readPort(dir) {
     return Number.isInteger(num) && num > 0 && num < 65536 ? num : null;
   } catch { return null; }
 }
-async function portReachable(port) {
+function readDebuggerEndpoint(dir) {
+  try {
+    const lines = fs.readFileSync(path.join(dir, "DevToolsActivePort"), "utf8").split(/\r?\n/);
+    const endpoint = (lines[1] || "").trim();
+    return /^\/devtools\/browser\/[a-z0-9-]+$/i.test(endpoint) ? endpoint : null;
+  } catch { return null; }
+}
+async function portReachable(port, expectedEndpoint) {
   if (!port) return false;
   return await new Promise(resolve => {
     let done = false;
     const finish = value => { if (!done) { done=true; resolve(value); } };
     const req = http.get({hostname:"127.0.0.1",port,path:"/json/version",timeout:1200},res=>{
-      res.resume();finish(res.statusCode === 200);
+      if(res.statusCode !== 200){res.resume();return finish(false);}
+      let body="";
+      res.on("data",chunk=>{body+=String(chunk);if(body.length>16384)req.destroy();});
+      res.on("end",()=>{
+        try {
+          const data=JSON.parse(body);
+          if(!/^Chrome\//.test(String(data.Browser||"")))return finish(false);
+          if(expectedEndpoint){
+            const actual=new URL(String(data.webSocketDebuggerUrl||"")).pathname;
+            return finish(actual===expectedEndpoint);
+          }
+          finish(true);
+        } catch { finish(false); }
+      });
+      res.on("error",()=>finish(false));
     });
     req.on("error",()=>finish(false));
     req.on("timeout",()=>{req.destroy();finish(false);});
@@ -83,7 +107,10 @@ async function inspect(options = {}) {
   const executable = resolveChromeExecutable({chromePath:options.chromePath,platform,env:options.env,exists:options.exists});
   const dir = profileDir(options.userDataDir, options.profile || "default");
   const port = readPort(dir);
-  const debuggingReady = await portReachable(port);
+  // A stale DevToolsActivePort may point to ANOTHER Chrome/profile.
+  // Compare the browser websocket identity saved by THIS GFlow profile.
+  const endpoint = readDebuggerEndpoint(dir);
+  const debuggingReady = Boolean(endpoint) && await portReachable(port, endpoint);
   const processes = !debuggingReady ? await windowsProfileProcesses(dir,{platform,exec:options.exec}) : [];
   return {
     executable: executable || null,
@@ -108,4 +135,92 @@ function guidance(state) {
   }
   return null;
 }
-module.exports={resolveChromeExecutable,profileDir,readPort,portReachable,windowsProfileProcesses,inspect,guidance};
+// Start debugging BEFORE authentication, never by launching a second regular Chrome
+// on top of the same profile. A running Chrome without CDP must be closed by the user.
+async function ensureDebugging(options = {}) {
+  const probe = options.probe || inspect;
+  const spawnChrome = options.spawnChrome || require("node:child_process").spawn;
+  const pause = options.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const initial = await probe(options);
+  if (initial.debuggingReady) return {...initial, launched:false};
+  const tip = guidance(initial);
+  if (tip) throw new Error(tip);
+  const platform = options.platform || process.platform;
+  if (platform === "win32" && !initial.processInspectionAvailable) {
+    throw new Error("Không kiểm tra được tiến trình Chrome GFlow qua Windows PowerShell. Hãy đóng phiên Chrome GFlow trước khi mở lại; không tắt Chrome cá nhân.");
+  }
+  if (!initial.executable || !initial.profileDir) throw new Error("Không xác định được Google Chrome hoặc GFlow profile.");
+  await (options.mkdir || fs.promises.mkdir)(initial.profileDir,{recursive:true});
+  const args = [
+    "--remote-debugging-port=0",
+    "--remote-debugging-address=127.0.0.1",
+    "--user-data-dir=" + initial.profileDir,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "https://flow.google.com/"
+  ];
+  const child = spawnChrome(initial.executable,args,{stdio:"ignore",windowsHide:false,detached:true});
+  let spawnError=null;
+  child.once?.("error",error=>{spawnError=error;});
+  child.unref?.();
+  for (let attempt=0;attempt<35;attempt++) {
+    await pause(500);
+    if(spawnError)throw new Error("Không mở được Chrome GFlow: "+spawnError.message);
+    const state = await probe(options);
+    if (state.debuggingReady && state.profileDir === initial.profileDir) return {...state,launched:true};
+  }
+  throw new Error("Đã yêu cầu mở Google Chrome với CDP nhưng chưa xác nhận được cổng điều khiển cho profile GFlow. Kiểm tra Chrome có mở không, đóng riêng phiên GFlow nếu cần rồi thử lại. Không xóa profile hoặc cookie.");
+}
+async function listWindowsChromeProcesses(options={}) {
+  if ((options.platform || process.platform)!=="win32") return [];
+  if (options.chromeProcesses) return options.chromeProcesses;
+  const script = '$items = @(Get-CimInstance Win32_Process -Filter "Name=\'chrome.exe\'" -ErrorAction Stop | Select-Object ProcessId,CommandLine); ConvertTo-Json -InputObject $items -Compress -Depth 2';
+  try {
+    const r=await (options.exec || exec)("powershell.exe",
+      ["-NoProfile","-NonInteractive","-Command",script],
+      {windowsHide:true,timeout:9000,maxBuffer:2*1024*1024});
+    const parsed=JSON.parse(String(r.stdout||"[]").trim()||"[]");
+    return (Array.isArray(parsed)?parsed:[parsed]).filter(x=>x&&Number.isInteger(Number(x.ProcessId)));
+  } catch { return null; }
+}
+function commandProfile(commandLine) {
+  const match=String(commandLine||"").match(/--user-data-dir=(?:"([^"]+)"|([^\s"]+))/i);
+  return match ? path.win32.normalize((match[1]||match[2]).trim()).toLowerCase().replace(/[\\\/]+$/,"") : null;
+}
+async function listChromeSessions(options={}) {
+  const current=String(options.profile||"default");
+  // Only GFlow-owned profiles can be selected: upstream gflow-cli uses this directory.
+  const base=path.join(options.userDataDir,".gflow","profiles");
+  const names=new Set([current]);
+  try { for(const item of fs.readdirSync(base,{withFileTypes:true}))
+    if(item.isDirectory()&&/^[A-Za-z0-9_-]{1,40}$/.test(item.name)) names.add(item.name);
+  } catch {}
+  const processes=await listWindowsChromeProcesses(options);
+  const matchedPids=new Set();
+  const sessions=[];
+  for(const name of names){
+    const dir=profileDir(options.userDataDir,name);
+    const normalized=path.win32.normalize(dir).toLowerCase().replace(/[\\\/]+$/,"");
+    const pids=Array.isArray(processes)?processes
+      .filter(p=>commandProfile(p.CommandLine)===normalized)
+      .map(p=>Number(p.ProcessId)):[];
+    pids.forEach(pid=>matchedPids.add(pid));
+    const port=readPort(dir),endpoint=readDebuggerEndpoint(dir);
+    const ready=Boolean(port&&endpoint)&&await (options.checkPort || portReachable)(port,endpoint);
+    // The selected profile may be closed: keep it visible so the user can start it.
+    if(pids.length||ready||name===current) sessions.push({
+      profile:name,label:"Chrome GFlow — "+name,
+      status:ready?"ready":pids.length?"no-cdp":"closed",
+      debuggingReady:ready,debugPort:ready?port:null,processCount:pids.length,
+      selectable:true
+    });
+  }
+  sessions.sort((a,b)=>Number(b.debuggingReady)-Number(a.debuggingReady)||a.profile.localeCompare(b.profile));
+  return {
+    sessions,selectedProfile:current,
+    externalChromeProcessCount:Array.isArray(processes)?processes.filter(p=>!matchedPids.has(Number(p.ProcessId))).length:null,
+    processInspectionAvailable:Array.isArray(processes)
+  };
+}
+
+module.exports={resolveChromeExecutable,profileDir,readPort,readDebuggerEndpoint,portReachable,windowsProfileProcesses,inspect,guidance,ensureDebugging,listWindowsChromeProcesses,commandProfile,listChromeSessions};

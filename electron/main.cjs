@@ -67,7 +67,22 @@ async function diagnoseOpenFlow(ws,capture=false){
 }
 
 function flags(ws){return [...(ws.profile?["--profile",ws.profile]:[]),...(ws.project?["--project",ws.project]:[])];}
-function artifact(dir,id,extensions){const x=w.latestArtifact(dir,id,extensions);if(!x)throw Error("Lệnh hoàn tất nhưng chưa tìm được file "+id+" trong "+dir);return path.join(dir,x);}
+function artifact(dir,id,extensions){
+ const x=w.latestArtifact(dir,id,extensions);
+ if(!x)throw Error("Lệnh hoàn tất nhưng chưa tìm được file "+id+" trong "+dir);
+ const file=path.join(dir,x),size=fs.statSync(file).size;
+ if(size<1024)throw Error("Tệp kết quả trống hoặc không hợp lệ: "+file);
+ const header=Buffer.alloc(16),fd=fs.openSync(file,"r");
+ try{fs.readSync(fd,header,0,header.length,0);}finally{fs.closeSync(fd);}
+ const ext=path.extname(file).toLowerCase();
+ const valid=ext===".png"?header.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):
+ ext===".jpg"||ext===".jpeg"?header[0]===255&&header[1]===216:
+ ext===".webp"?header.toString("ascii",0,4)==="RIFF"&&header.toString("ascii",8,12)==="WEBP":
+ ext===".mp4"?header.toString("ascii",4,8)==="ftyp":
+ ext===".webm"?header.subarray(0,4).equals(Buffer.from([26,69,223,163])):false;
+ if(!valid)throw Error("Tệp đầu ra không đúng định dạng "+ext+": "+file);
+ return file;
+}
 function sdk(autoLaunch=false){const raw=require("google-flow-cli"),FlowClient=raw.FlowClient||raw.default||raw;return new FlowClient({port:9222,autoLaunch});}
 async function sdkDoctor(){const c=sdk(false);try{return await c.doctor();}finally{await c.disconnect().catch(()=>{});}}
 async function sdkProjects(){const c=sdk(true);try{return await c.listProjects();}finally{await c.disconnect().catch(()=>{});}}
@@ -98,7 +113,7 @@ scene.status="generating";scene.error=undefined;emit({kind:"scene",sceneId:scene
 try{if(ws.engine==="sdk"){scene.video=await sdkVideo(ws,scene,i+1,dir);}
 else{
 if(ws.prepareImages&&scene.imagePrompt&&!(scene.image&&fs.existsSync(scene.image))){
- const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id);
+ const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id+"-"+Date.now());
  if(ws.useSceneReferences!==false){
   scene.image=await createFrameWithReferences(ws,scene.imagePrompt,id,dir,state,"cảnh "+(i+1));
  }else{
@@ -112,7 +127,7 @@ if(ws.prepareImages&&scene.imagePrompt&&!(scene.image&&fs.existsSync(scene.image
 }
 if(scene.image&&fs.existsSync(scene.image))log("Cảnh "+(i+1)+": sử dụng ảnh keyframe có sẵn "+path.basename(scene.image));
 if(state.cancelled)throw Error("Hàng đợi đã được hủy.");
-const id=w.safeJobId("clip-"+(i+1)+"-"+scene.id);const args=["video","--id",id,"--prompt",scene.prompt,"--model",ws.videoModel,"--duration",String(scene.duration),"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];
+const id=w.safeJobId("clip-"+(i+1)+"-"+scene.id+"-"+Date.now());const args=["video","--id",id,"--prompt",scene.prompt,"--model",ws.videoModel,"--duration",String(scene.duration),"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];
 if(scene.image&&fs.existsSync(scene.image))args.push("--start-frame",scene.image);if(useSavedCharacter&&ws.character.name)args.push("--character",ws.character.name);log("GFlow video cảnh "+(i+1)+": chuẩn bị gửi prompt và chờ tạo.");await cmd(args,1800000,ws.chromePath,ws.project);scene.video=artifact(dir,id,[".mp4",".webm"]); }
 scene.status="completed";emit({kind:"scene",sceneId:scene.id,status:"completed",image:scene.image,video:scene.video});log("Đã tải: "+scene.video);
 }catch(e){scene.status="failed";scene.error=String(e.message||e);log("Lỗi: "+scene.error);emit({kind:"scene",sceneId:scene.id,status:"failed",error:scene.error});break;}
@@ -146,9 +161,31 @@ ipcMain.handle("workspace:get",()=>workspace());
 ipcMain.handle("workspace:save",(_,x)=>{idle();return save(x);});
 ipcMain.handle("settings:get",()=>settings());ipcMain.handle("settings:save",(_,x)=>saveSettings(x));
 ipcMain.handle("story:generate",(_,x)=>story(x));
-ipcMain.handle("flow:auth",(_,x)=>{idle();return cmd(["auth","login","--profile",x?.profile||"default"],120000,x?.chromePath);});
+function chromeOptions(x){
+ const stored=workspace();
+ return {userDataDir:root(),profile:x?.profile||stored.profile||"default",chromePath:x?.chromePath||stored.chromePath};
+}
+ipcMain.handle("flow:auth",async(_,x)=>{
+ idle();
+ const state=await chrome.ensureDebugging(chromeOptions(x));
+ return "Chrome GFlow đã sẵn sàng với CDP port "+state.debugPort+" (profile "+(x?.profile||workspace().profile||"default")+"). Đăng nhập Google trực tiếp trong Chrome vừa mở nếu cần, sau đó mở project và bấm Dò project.";
+});
+ipcMain.handle("flow:chrome:start",async(_,x)=>{
+ idle();
+ const state=await chrome.ensureDebugging(chromeOptions(x));
+ return {ready:state.debuggingReady,launched:state.launched,debugPort:state.debugPort,profileDir:state.profileDir};
+});
+ipcMain.handle("flow:chrome:list",async(_,x)=>{
+ idle();
+ return chrome.listChromeSessions(chromeOptions(x));
+});
 ipcMain.handle("flow:chromeStatus",async(_,x)=>{idle();return chrome.inspect({userDataDir:root(),profile:x?.profile||"default",chromePath:x?.chromePath||workspace().chromePath});});
-ipcMain.handle("flow:doctor",async(_,x)=>{idle();const profile=x?.profile||"default";const state=await chrome.inspect({userDataDir:root(),profile,chromePath:x?.chromePath||workspace().chromePath});const tip=chrome.guidance(state);if(tip)throw Error(tip);return cmd(["doctor","--profile",profile],120000,x?.chromePath);});
+ipcMain.handle("flow:doctor",async(_,x)=>{
+ idle();
+ const options=chromeOptions(x),state=await chrome.ensureDebugging(options);
+ log("Chrome GFlow đã sẵn sàng: "+state.profileDir+" | CDP: "+state.debugPort);
+ return cmd(["doctor","--profile",options.profile],120000,options.chromePath);
+});
 ipcMain.handle("flow:diagnose",async(_,x)=>{idle();const ws=w.normalizeWorkspace(x?.workspace||workspace(),output());await requireOpenedGflowProject(ws);const result=await diagnoseOpenFlow(ws,true);log("Chẩn đoán giao diện Flow: "+result.reason+" | "+(result.screenshot||result.jsonPath||"không có ảnh chụp"));return result;});
 ipcMain.handle("flow:extension:status",async(_,x)=>{
  idle();
@@ -321,7 +358,7 @@ ipcMain.handle("flow:images:all",async(_event,payload)=>{
       scene.error=undefined;
       emit({kind:"scene",sceneId:scene.id,status:"generating"});
       log("Tạo ảnh cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
-      const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id);
+      const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id+"-"+Date.now());
       try{
         if(ws.useSceneReferences!==false){
           scene.image=await createFrameWithReferences(ws,scene.imagePrompt,id,dir,state,"cảnh "+(i+1));

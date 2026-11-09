@@ -18,8 +18,9 @@ npm run dev
 
 ## Sử dụng
 
-1. Vào Cài đặt → Đăng nhập Chrome. Đăng nhập Google thủ công vào cửa sổ Chrome do GFlow mở.
-2. Bấm GFlow Doctor, chọn engine GFlow CLI làm mặc định.
+1. Vào Cài đặt → **Quét Chrome** để xem các profile GFlow đang mở; chọn profile cần sử dụng. Chrome bên ngoài GFlow không thể chọn để tự động điều khiển.
+2. Bấm **Mở / kết nối CDP** hoặc **Đăng nhập Chrome**: ứng dụng sẽ mở Google Chrome với CDP ngay từ đầu và tái sử dụng nếu profile đã có CDP. Đăng nhập Google trong chính cửa sổ đó nếu cần.
+3. Mở project Google Flow trong cửa sổ vừa kết nối, bấm **Dò project đang mở**, chọn GFlow CLI làm engine.
 3. Vào Nhân vật, mô tả người dẫn, tải ảnh tham chiếu, chọn voice nếu có trong Flow, bấm Tạo trên Google Flow.
 4. Nhập chủ đề và số phân cảnh. Bấm AI viết kịch bản (cần OpenAI/Gemini key) hoặc dùng mẫu; xem và sửa prompt từng cảnh.
 5. Bấm Lưu dự án, sau đó Chạy toàn bộ. Engine GFlow tạo ảnh keyframe tùy cấu hình, tạo video từng cảnh rồi lưu về máy.
@@ -56,7 +57,7 @@ GFlow CLI © swissmarley, MIT; Google Flow CLI © Zahed Rastgar, MIT. Hai upstre
 
 Nếu **GFlow Doctor** báo `Could not start Google Chrome with a debugging port`, có hai nguyên nhân thường gặp:
 
-1. `swissmarley/gflow-cli` hiện có `findChromeProcessesForProfile()` trả về `[]` trên Windows. Vì vậy nó không tự đóng cửa sổ **Chrome đăng nhập** trước khi khởi động phiên Chrome có CDP. Hãy **đóng hoàn toàn cửa sổ Chrome do GFlow mở để đăng nhập**, không đóng Chrome cá nhân, rồi bấm Doctor. Không xóa profile/cookie.
+1. App nay có **Quét Chrome** (chọn profile GFlow) và **Mở / kết nối CDP** để khởi động Chrome đúng profile với `--remote-debugging-port=0` ngay từ đầu. Nếu Chrome GFlow kiểu cũ đang mở mà không có CDP, hãy **đóng riêng cửa sổ GFlow đó** rồi kết nối lại. Không đóng Chrome cá nhân; không xóa profile/cookie. Chrome thông thường không có CDP không thể điều khiển qua Playwright.
 2. Chrome không nằm tại `C:\Program Files\Google\Chrome\Application\chrome.exe`. Vào Cài đặt → **Đường dẫn Google Chrome**, chọn `chrome.exe` ở thư mục cài đặt thật (ví dụ `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` hoặc AppData). Bấm **Chẩn đoán Chrome / profile** trước khi Doctor.
 
 Ứng dụng chỉ *kiểm tra* tiến trình Chrome sử dụng chính profile gflow và cảnh báo rõ ràng, không tự đóng Chrome hoặc xóa dữ liệu cá nhân. Khi lỗi thuộc upstream, cần sửa/chạy test trên máy Windows có Chrome đã đăng nhập để xác nhận hoạt động thực tế.
