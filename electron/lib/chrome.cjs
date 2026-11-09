@@ -135,4 +135,37 @@ function guidance(state) {
   }
   return null;
 }
-module.exports={resolveChromeExecutable,profileDir,readPort,readDebuggerEndpoint,portReachable,windowsProfileProcesses,inspect,guidance};
+// Start debugging BEFORE authentication, never by launching a second regular Chrome
+// on top of the same profile. A running Chrome without CDP must be closed by the user.
+async function ensureDebugging(options = {}) {
+  const probe = options.probe || inspect;
+  const spawnChrome = options.spawnChrome || require("node:child_process").spawn;
+  const pause = options.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const initial = await probe(options);
+  if (initial.debuggingReady) return {...initial, launched:false};
+  const tip = guidance(initial);
+  if (tip) throw new Error(tip);
+  const platform = options.platform || process.platform;
+  if (platform === "win32" && !initial.processInspectionAvailable) {
+    throw new Error("Không kiểm tra được tiến trình Chrome GFlow qua Windows PowerShell. Hãy đóng phiên Chrome GFlow trước khi mở lại; không tắt Chrome cá nhân.");
+  }
+  if (!initial.executable || !initial.profileDir) throw new Error("Không xác định được Google Chrome hoặc GFlow profile.");
+  await (options.mkdir || fs.promises.mkdir)(initial.profileDir,{recursive:true});
+  const args = [
+    "--remote-debugging-port=0",
+    "--remote-debugging-address=127.0.0.1",
+    "--user-data-dir=" + initial.profileDir,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "https://flow.google.com/"
+  ];
+  const child = spawnChrome(initial.executable,args,{stdio:"ignore",windowsHide:false,detached:true});
+  child.unref?.();
+  for (let attempt=0;attempt<35;attempt++) {
+    await pause(500);
+    const state = await probe(options);
+    if (state.debuggingReady && state.profileDir === initial.profileDir) return {...state,launched:true};
+  }
+  throw new Error("Đã yêu cầu mở Google Chrome với CDP nhưng chưa xác nhận được cổng điều khiển cho profile GFlow. Kiểm tra Chrome có mở không, đóng riêng phiên GFlow nếu cần rồi thử lại. Không xóa profile hoặc cookie.");
+}
+module.exports={resolveChromeExecutable,profileDir,readPort,readDebuggerEndpoint,portReachable,windowsProfileProcesses,inspect,guidance,ensureDebugging};
