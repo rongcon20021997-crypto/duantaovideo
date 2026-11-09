@@ -8,7 +8,7 @@ function projectUrl(value){
     if(url.hostname!=="flow.google.com")return null;
     const match=url.pathname.match(/^\/project\/([0-9a-f-]{24,64})(?:\/|$)/i);
     if(!match)return null;
-    return "https://flow.google.com/project/"+match[1];
+    return "https://flow.google.com/project/"+match[1].toLowerCase();
   }catch{return null;}
 }
 function is404(value){

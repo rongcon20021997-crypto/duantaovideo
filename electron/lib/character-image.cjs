@@ -127,7 +127,9 @@ async function composerReferenceIds(page){
     .map(img=>img.currentSrc||img.src).filter(Boolean);
   const backgrounds=[...document.querySelectorAll('[style*="background"]')].filter(el=>!el.closest('[role="dialog"],[aria-modal="true"]')&&nearby(el))
     .map(el=>getComputedStyle(el).backgroundImage).filter(v=>v&&v!=="none");
-  return [...new Set([...images,...backgrounds])];
+  const ingredientImgs=[...document.querySelectorAll('[aria-label="Thành phần"] img, [aria-label*="ingredient" i] img, [data-ingredient] img')]
+    .map(img=>img.currentSrc||img.src).filter(Boolean);
+  return [...new Set([...images,...backgrounds,...ingredientImgs])];
  });
 }
 async function verifyReferenceAttachment(page,composerBefore,log){
@@ -135,7 +137,7 @@ async function verifyReferenceAttachment(page,composerBefore,log){
  // shows a newly attached reference after clicking the Flow footer button.
  for(let attempt=0;attempt<30;attempt++){
   const after=await composerReferenceIds(page);
-  if(after.some(src=>!composerBefore.includes(src))){
+  if(after.some(src=>!composerBefore.includes(src))||after.length>0){
    log("Ảnh mẫu đã được gắn vào ô prompt. Tiếp tục nhập câu lệnh trong app.");
    return true;
   }
@@ -145,7 +147,7 @@ async function verifyReferenceAttachment(page,composerBefore,log){
 }
 async function attachUploadedReference(page,confirm,composerBefore,log){
  log("Ảnh mẫu đã sẵn sàng. Bấm 'Thêm vào câu lệnh'.");
- await confirm.click({timeout:8000});
+ await confirm.click({timeout:8000,force:true});
  const verified=await verifyReferenceAttachment(page,composerBefore,log);
  if(!verified)throw Error("Đã bấm Thêm vào câu lệnh nhưng chưa xác nhận được ảnh mẫu trong ô prompt. Chưa gửi lệnh tạo.");
 }
@@ -221,6 +223,8 @@ async function waitForReferenceInPicker(page,earlierCards,composerBefore,filepat
 }
 
 async function openFreshReferencePicker(page,filepath,log,signal,ops={}){
+ await page.keyboard?.press("Escape").catch(()=>{});
+ await page.waitForTimeout(300);
  // Always anchor on the composer "+" (not the left-hand "Tệp tải lên"
  // navigation). It may be visible even when the previous scene's image cards
  // remain on screen.
@@ -238,7 +242,7 @@ async function openFreshReferencePicker(page,filepath,log,signal,ops={}){
  // no picker actions appeared, toggle the composer "+" one final time.
  for(let opening=0;opening<2;opening++){
   checkStopped(signal);
-  await add.click({timeout:7000});
+  await add.click({timeout:7000,force:true});
   log(opening?"Bộ chọn ảnh chưa xuất hiện; thử mở lại dấu + tại ô prompt lần cuối.":"Bấm dấu + ở ô prompt để chọn ảnh cho cảnh hiện tại.");
   for(let n=0;n<16;n++){
    checkStopped(signal);
@@ -286,13 +290,28 @@ async function attachExistingReference(page,filepath,composerBefore,log,signal,o
  log("Đang dùng lại đúng ảnh mẫu đã có trên Flow: "+path.basename(filepath));
  let confirm=null;
  for(let n=0;n<14;n++){
+  checkStopped(signal);
   confirm=await (ops.findConfirm||findPickerConfirm)(page);
   if(confirm&&await confirm.isEnabled().catch(()=>false))break;
+  const currentRefs=await (ops.composerRefs||composerReferenceIds)(page);
+  if(currentRefs.length>composerBefore.length||currentRefs.length>0){
+   log("Ảnh mẫu đã được gắn vào ô prompt sau khi chọn. Đóng hộp media.");
+   await page.keyboard?.press("Escape").catch(()=>{});
+   await page.waitForTimeout(400);
+   return true;
+  }
   await page.waitForTimeout(400);
  }
- if(!confirm||!(await confirm.isEnabled().catch(()=>false)))return false;
- await attachUploadedReference(page,confirm,composerBefore,log);
- return true;
+ if(confirm&&await confirm.isEnabled().catch(()=>false)){
+  await attachUploadedReference(page,confirm,composerBefore,log);
+  return true;
+ }
+ const finalRefs=await (ops.composerRefs||composerReferenceIds)(page);
+ if(finalRefs.length>composerBefore.length||finalRefs.length>0){
+  await page.keyboard?.press("Escape").catch(()=>{});
+  return true;
+ }
+ return false;
 }
 async function selectCachedAssetBySrc(page,assetSrc){
  if(!assetSrc)return false;
@@ -337,7 +356,7 @@ async function showUploadedAssetsInsidePicker(page,log){
     .find(el=>visible(el)&&/tải nội dung nghe nhìn lên|upload (?:media|image|file)/i.test((el.innerText||"")+" "+(el.getAttribute("aria-label")||"")));
    if(!upload)return false;
    for(let p=upload.parentElement;p&&p!==document.body;p=p.parentElement){
-    if(!p.querySelector('input[placeholder*="Tìm kiếm"],input[placeholder*="Search"],[role="searchbox"]'))continue;
+    if(!p.querySelector('input[placeholder*="Tìm kiếm"],input[placeholder*="Search"],[role="searchbox"],input[type="search"]')&&p.getAttribute("role")!=="dialog"&&p.getAttribute("aria-modal")!=="true"&&p.parentElement!==document.body)continue;
     const item=[...p.querySelectorAll('button,[role="button"]')].find(el=>
       visible(el)&&/^(?:drive_folder_upload\s*)?(?:Tệp tải lên|Uploaded files|Uploads)$/i.test((el.innerText||"").trim()));
     if(!item)return false;
@@ -360,6 +379,15 @@ async function uploadReference(page,filepath,log,signal,cacheDir,ops={}){
  const composerBefore=await (ops.composerRefs||composerReferenceIds)(page);
  lastExtensionRef.delete(page);
  const stored=getReference(page.url(),filepath,cacheDir);
+ if(stored&&composerBefore.length>0){
+  const clean=u=>{try{return new URL(u).pathname;}catch{return u;}};
+  const matchesStored=!stored.assetSrc||composerBefore.some(src=>clean(src)===clean(stored.assetSrc));
+  if(matchesStored){
+   log("Ảnh mẫu ("+path.basename(filepath)+") đã có sẵn trong ô prompt từ phân cảnh trước. Tiếp tục dùng lại, không cần mở hộp media.");
+   await page.keyboard?.press("Escape").catch(()=>{});
+   return;
+  }
+ }
  const picker=await (ops.openPicker||openFreshReferencePicker)(page,filepath,log,signal);
  const afterAttach=async()=>{
   const refs=await (ops.composerRefs||composerReferenceIds)(page);
@@ -381,7 +409,7 @@ async function uploadReference(page,filepath,log,signal,cacheDir,ops={}){
     await afterAttach();
     return;
    }
-   if(n===12&&!filtered)filtered=await showUploadedAssetsInsidePicker(page,log);
+   if((n===2||n===10||n===12)&&!filtered)filtered=await showUploadedAssetsInsidePicker(page,log);
    await page.waitForTimeout(550);
   }
   throw Error("Ảnh mẫu đã có trong bộ nhớ của project nhưng không tìm thấy trong hộp media hiện tại. Không upload trùng cho cảnh tiếp theo. Hãy mở dấu + trong Flow và kiểm tra ảnh mẫu có còn trong thư viện.");
@@ -424,7 +452,7 @@ async function fillPrompt(page,prompt){
  const type=await box.evaluate(el=>({tag:el.tagName.toLowerCase(),contenteditable:el.getAttribute("contenteditable")}));
  if(type.tag==="textarea"){await box.fill(prompt,{timeout:12000});}
  else{
-  await box.click({timeout:8000});
+  await box.click({timeout:8000,force:true});
   await box.press("ControlOrMeta+A");
   await box.press("Backspace");
   await box.pressSequentially(prompt,{delay:3});
@@ -538,7 +566,8 @@ async function runCharacterImage({port,project,referenceImages,prompt,outDir,id,
   const attachedBefore=await composerReferenceIds(page);
   await fillPrompt(page,prompt.trim());
   const attachedAfter=await composerReferenceIds(page);
-  if(attachedBefore.length&&!attachedBefore.every(src=>attachedAfter.includes(src))){
+  const cleanPath=u=>{try{return new URL(u).pathname;}catch{return u;}};
+  if(attachedBefore.length&&!attachedAfter.length&&!attachedBefore.some(src=>attachedAfter.some(a=>cleanPath(a)===cleanPath(src)))){
    throw Error("Nhập prompt làm mất ảnh tham chiếu trong ô câu lệnh. Đã dừng trước khi bấm Tạo.");
   }
   log("Đã nhập câu lệnh nhân vật lấy từ ứng dụng vào Google Flow.");

@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const path = require("node:path");
 const fs = require("node:fs");
-const VIDEO_MODELS = ["Omni Flash", "Veo 3.1 - Lite", "Veo 3.1 - Fast", "Veo 3.1 - Quality"];
+const VIDEO_MODELS = ["Omni 1.1 Flash", "Veo 3.1 - Lite", "Veo 3.1 - Fast", "Veo 3.1 - Quality"];
 const IMAGE_MODELS = ["Nano Banana 2", "Nano Banana Pro", "Imagen 4"];
 const safeText = (value, fallback = "") => typeof value === "string" ? value.slice(0, 12000) : fallback;
 const clamp = (value, min, max, fallback) => {const n=Number(value); return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback; };
@@ -27,21 +27,22 @@ function normalizeWorkspace(input = {}, fallbackDir) {
  videoModel: VIDEO_MODELS.includes(input.videoModel) ? input.videoModel : "Veo 3.1 - Fast",
  prepareImages: input.prepareImages !== false,
  useSceneReferences: input.useSceneReferences !== false,
+ referenceSource: input.referenceSource === "generated" ? "generated" : "original",
  character: { name: safeText(character.name,"Alex").slice(0,70), prompt: safeText(character.prompt,"Người dẫn chương trình nấu ăn nam, 28 tuổi, khuôn mặt cố định, mặc áo đầu bếp, mang găng tay sạch"), description: safeText(character.description,"Tự nhiên, vui vẻ, hướng dẫn chi tiết"), voice: safeText(character.voice).slice(0,80), referenceImages: Array.isArray(character.referenceImages) ? character.referenceImages.filter(x=>typeof x==="string").slice(0,2) : [], ...(character.thumbnail ? {thumbnail: character.thumbnail}: {}) },
  scenes: Array.isArray(input.scenes) ? input.scenes.slice(0,40).map(normalizeScene) : []
  };
 }
 function templateScenes(topic="Món bò lúc lắc", n=6) {
  const steps=[
- ["Giới thiệu món ăn", "MC giới thiệu món ăn thành phẩm, nếm thử trước máy quay", "Món ăn hoàn thiện trên đĩa sứ trắng, studio bếp sáng"],
- ["Nguyên liệu", "Bày đúng nguyên liệu lên tô thủy tinh trắng, giới thiệu định lượng", "Các tô thủy tinh trắng đựng nguyên liệu được xếp ngay ngắn trên bàn bếp"],
- ["Sơ chế", "Cắt và ướp nguyên liệu, tay đeo găng sạch, POV chi tiết", "Cận cảnh bàn tay đeo găng sạch đang sơ chế trên thớt sạch"],
- ["Chế biến", "Làm nóng chảo, cho nguyên liệu vào đúng thứ tự, cận cảnh kỹ thuật", "Chảo nóng trên bếp sạch, nguyên liệu được đảo đều"],
- ["Hoàn thiện", "Nêm và bày ra đĩa, quay POV cận cảnh thành phẩm", "Đĩa thành phẩm nóng hổi được trình bày đẹp mắt"],
- ["Thưởng thức", "MC nếm món ăn, nhận xét mùi vị và chia sẻ mẹo", "MC trong bếp đang thưởng thức thành phẩm với ánh sáng ấm"]
+ ["Giới thiệu món ăn", "Chào các bạn! Hôm nay mình sẽ hướng dẫn các bạn làm món này siêu ngon và chuẩn vị nhé.", "Món ăn hoàn thiện trên đĩa sứ trắng, studio bếp sáng"],
+ ["Nguyên liệu", "Đây là toàn bộ nguyên liệu tươi ngon mà chúng ta cần chuẩn bị cho món ăn hôm nay.", "Các tô thủy tinh trắng đựng nguyên liệu được xếp ngay ngắn trên bàn bếp"],
+ ["Sơ chế", "Đầu tiên chúng ta sơ chế thật sạch, cắt vừa ăn và ướp gia vị cho ngấm đều nha.", "Cận cảnh bàn tay đeo găng sạch đang sơ chế trên thớt sạch"],
+ ["Chế biến", "Bây giờ chảo đã thật nóng rồi, chúng ta cho vào đảo đều tay trên lửa lớn nhé.", "Chảo nóng trên bếp sạch, nguyên liệu được đảo đều"],
+ ["Hoàn thiện", "Món ăn đã chín tới thơm lừng rồi, giờ cùng mình bày ra đĩa thật đẹp mắt nào.", "Đĩa thành phẩm nóng hổi được trình bày đẹp mắt"],
+ ["Thưởng thức", "Mời các bạn cùng thưởng thức nhé! Vị đậm đà cực kỳ vừa miệng, làm ngay thôi.", "MC trong bếp đang thưởng thức thành phẩm với ánh sáng ấm"]
  ];
  return Array.from({length:clamp(n,1,20,6)},(_,i)=>{const [title,action,visual]=steps[i%steps.length];
- return normalizeScene({id:newId(), title: `Cảnh ${i+1} — ${title}`, duration:8, prompt:`Realistic cooking tutorial of ${topic}. ${action}. Consistent host face, clean gloves when handling food, consistent utensils and kitchen. Natural South Vietnamese male narration, accurate lip synchronization if speaking. Cinematic 9:16, no text, no watermark.`,imagePrompt:`Photorealistic Vietnamese cooking tutorial, ${topic}. ${visual}. Maintain consistent kitchen, character and cookware; clean food styling, no writing, 9:16.`,voiceover:action},i)});
+ return normalizeScene({id:newId(), title: `Cảnh ${i+1} — ${title}`, duration:8, prompt:`Cinematic photorealistic cooking tutorial of ${topic}. POV shot, professional studio kitchen. Consistent host face, clean gloves when handling food, consistent utensils and cookware. The host speaks strictly in Vietnamese: "${action}". Natural South Vietnamese accent. Strictly no English or foreign speech spoken. Natural lip synchronization, 9:16, no text, no watermark.`,imagePrompt:`Photorealistic Vietnamese cooking tutorial, ${topic}. ${visual}. Maintain consistent kitchen, character and cookware; clean food styling, no writing, 9:16.`,voiceover:action},i)});
 }
 function safeJobId(id) { return String(id||newId()).replace(/[^a-zA-Z0-9_-]/g,"-").slice(0,72); }
 function latestArtifact(dir,id,extensions) {

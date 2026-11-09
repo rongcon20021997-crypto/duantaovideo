@@ -121,11 +121,25 @@ finally{await save(ws);}
 }finally{active=null;emit({kind:"run",running:false});}}
 async function story(input){const s=settings(),key=secret();if(!key)throw Error("Cần AI API key ở Cài đặt để tạo kịch bản bằng AI; có thể dùng Mẫu 6 cảnh để thử.");
 const count=Math.max(1,Math.min(20,Math.round(Number(input?.count)||6)));const topic=String(input?.topic||"Dạy nấu ăn").slice(0,400);
-const instruction='Viết kịch bản video nấu ăn tiếng Việt với đúng '+count+' phân cảnh, chủ đề "'+topic+'". Người dẫn thống nhất khuôn mặt, đạo cụ và bối cảnh. Khi chế biến phải đeo găng tay sạch. Ưu tiên POV, nhân vật xuất hiện có chọn lọc. Giọng NAM MIỀN NAM đồng nhất. Mỗi cảnh 8 giây: hành động, khung hình, lời thoại phải vừa thời lượng. Trả JSON object duy nhất: {"scenes":[{"title":"Tên cảnh","prompt":"English realistic Veo prompt with action, camera and Vietnamese speech","imagePrompt":"English photorealistic start-frame description","voiceover":"Lời thoại ngắn giọng nam miền Nam","duration":8}]}. Không thêm markdown. Phân chia đầy đủ giới thiệu, nguyên liệu, sơ chế, nấu, thành phẩm, thưởng thức.';
+const instruction='Viết kịch bản video với đúng '+count+' phân cảnh cho chủ đề: "'+topic+'". '+
+'QUY TẮC BẮT BUỘC VỀ NGÔN NGỮ: '+
+'1. MÔ TẢ HÌNH ẢNH VÀ HÀNH ĐỘNG (prompt & imagePrompt) PHẢI VIẾT BẰNG TIẾNG ANH: '+
+'"imagePrompt" mô tả chi tiết hình ảnh khung hình đầu bằng tiếng Anh (cinematic lighting, photorealistic, 9:16, no text). '+
+'"prompt" mô tả hành động, góc máy, camera movement, visual style hoàn toàn bằng tiếng Anh. '+
+'2. PHẦN NÓI / THOẠI CỦA NHÂN VẬT BẮT BUỘC LÀ TIẾNG VIỆT, TUYỆT ĐỐI KHÔNG NÓI TIẾNG ANH HOẶC TIẾNG NƯỚC NGOÀI: '+
+'Trong "prompt", nếu nhân vật nói chuyện, bắt buộc ghi rõ: The host speaks strictly in Vietnamese: "[câu thoại tiếng Việt]", natural South Vietnamese accent. Strictly no English or foreign speech spoken. '+
+'"voiceover": Câu thoại thuần tiếng Việt tương ứng (ngắn gọn, khớp thời lượng 8 giây). '+
+'3. "title": Tiêu đề phân cảnh bằng tiếng Việt. "duration": 8. '+
+'Bắt buộc tạo mảng "scenes" có đúng '+count+' phân cảnh. Trả JSON object duy nhất: {"scenes":[{"title":"Tên cảnh","prompt":"English Veo prompt with Vietnamese dialogue: The host speaks strictly in Vietnamese: \\"...\\", natural South Vietnamese accent. Strictly no English or foreign speech spoken.","imagePrompt":"English photorealistic start-frame description","voiceover":"Câu nói tiếng Việt","duration":8}]}. Không thêm markdown hay bất kỳ văn bản nào ngoài JSON.';
 let txt="";
 if(s.provider==="gemini"){const res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(s.model)+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents:[{parts:[{text:instruction}]}],generationConfig:{responseMimeType:"application/json"}}),signal:AbortSignal.timeout(90000)});const j=await res.json();if(!res.ok)throw Error(JSON.stringify(j.error||j).slice(0,1000));txt=j.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")||"";}
 else{const res=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+key},body:JSON.stringify({model:s.model,messages:[{role:"user",content:instruction}],response_format:{type:"json_object"}}),signal:AbortSignal.timeout(90000)});const j=await res.json();if(!res.ok)throw Error(JSON.stringify(j.error||j).slice(0,1000));txt=j.choices?.[0]?.message?.content||"";}
-const parsed=JSON.parse(txt.replace(/^\x60{3}(?:json)?\s*/i,"").replace(/\s*\x60{3}$/,""));if(!Array.isArray(parsed.scenes)||parsed.scenes.length!==count)throw Error("AI trả về số cảnh không chính xác; thử lại.");return parsed.scenes.map((x,i)=>w.normalizeScene({...x,id:w.newId(),status:"pending"},i));
+let cleaned=txt.trim();const match=cleaned.match(/\{[\s\S]*\}|\[[\s\S]*\]/);if(match)cleaned=match[0];
+let parsed;try{parsed=JSON.parse(cleaned);}catch(_){parsed=JSON.parse(cleaned.replace(/^\x60{3}(?:json)?\s*/i,"").replace(/\s*\x60{3}$/,""));}
+let scenes=Array.isArray(parsed)?parsed:(parsed?.scenes||parsed?.storyboard||parsed?.kịch_bản||Object.values(parsed||{}).find(Array.isArray));
+if(!Array.isArray(scenes)||scenes.length===0)throw Error("AI không trả về danh sách phân cảnh hợp lệ; vui lòng bấm tạo lại.");
+if(scenes.length>count)scenes=scenes.slice(0,count);
+return scenes.map((x,i)=>w.normalizeScene({...x,id:w.newId(),status:"pending"},i));
 }
 function initIpc(){
 ipcMain.handle("workspace:get",()=>workspace());
@@ -278,6 +292,61 @@ ipcMain.handle("flow:image:create",async(_event,payload)=>{
     throw Error(message+(report?"\nẢnh chụp chẩn đoán trên máy: "+report:""));
   }finally{
     active=null;emit({kind:"run",running:false});
+  }
+});
+ipcMain.handle("flow:images:all",async(_event,payload)=>{
+  idle();
+  const overwrite=payload?.overwrite===true;
+  const ws=w.normalizeWorkspace(payload?.workspace||workspace(),output());
+  if(!ws.scenes.length)throw Error("Chưa có phân cảnh nào.");
+  if(ws.engine==="gflow")await requireOpenedGflowProject(ws);
+  const state={cancelled:false,child:null,controller:new AbortController()};
+  active=state;
+  const dir=path.resolve(ws.outputDir);
+  await fsp.mkdir(dir,{recursive:true});
+  emit({kind:"run",running:true});
+  try{
+    for(let i=0;i<ws.scenes.length;i++){
+      const scene=ws.scenes[i];
+      if(state.cancelled)break;
+      if(!overwrite&&scene.image&&fs.existsSync(scene.image)){
+        log("Cảnh "+(i+1)+": đã có ảnh, bỏ qua: "+path.basename(scene.image));
+        continue;
+      }
+      if(!scene.imagePrompt){
+        log("Cảnh "+(i+1)+": không có prompt ảnh, bỏ qua.");
+        continue;
+      }
+      scene.status="generating";
+      scene.error=undefined;
+      emit({kind:"scene",sceneId:scene.id,status:"generating"});
+      log("Tạo ảnh cảnh "+(i+1)+"/"+ws.scenes.length+": "+scene.title);
+      const id=w.safeJobId("frame-"+(i+1)+"-"+scene.id);
+      try{
+        if(ws.useSceneReferences!==false){
+          scene.image=await createFrameWithReferences(ws,scene.imagePrompt,id,dir,state,"cảnh "+(i+1));
+        }else{
+          const args=["image","--id",id,"--prompt",scene.imagePrompt,"--model",ws.imageModel,"--ratio",ws.ratio,"--outputs","1","--out",dir,...flags(ws)];
+          await cmd(args,1800000,ws.chromePath,ws.project);
+          scene.image=artifact(dir,id,[".png",".jpg",".jpeg",".webp"]);
+        }
+        scene.status="pending";
+        emit({kind:"scene",sceneId:scene.id,status:"pending",image:scene.image});
+        log("Đã tạo xong ảnh cảnh "+(i+1)+": "+scene.image);
+      }catch(err){
+        scene.status="failed";
+        scene.error=String(err.message||err);
+        log("Lỗi tạo ảnh cảnh "+(i+1)+": "+scene.error);
+        emit({kind:"scene",sceneId:scene.id,status:"failed",error:scene.error});
+        break;
+      }finally{
+        await save(ws);
+      }
+    }
+    return ws;
+  }finally{
+    active=null;
+    emit({kind:"run",running:false});
   }
 });
 ipcMain.handle("flow:run",(_,x)=>run(x));ipcMain.handle("flow:stop",()=>{if(!active)return false;active.cancelled=true;active.controller?.abort();active.child?.kill();log("Đã yêu cầu dừng.");return true;});

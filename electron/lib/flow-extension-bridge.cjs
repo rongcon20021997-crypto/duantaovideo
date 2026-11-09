@@ -14,27 +14,28 @@ async function extensionStatus(page){
  }));
 }
 async function findExtensionAssetByFilename(page,filepath){
- const filename=path.basename(filepath).toLowerCase(),prefix=filename.slice(0,Math.min(19,filename.length));
- if(prefix.length<8)return null;
- return page.evaluate(({prefix})=>{
-  if(document.documentElement.dataset.dtvExtensionReady!=="1"||!document.querySelector('[data-dtv-picker="1"]'))return null;
-  const root=document.querySelector('[data-dtv-picker="1"]');
+ const filename=path.basename(filepath).toLowerCase();
+ const stem=filename.replace(/\.[^.]+$/,"");
+ const prefix=filename.slice(0,Math.min(19,filename.length));
+ if(prefix.length<2&&stem.length<2)return null;
+ return page.evaluate(({prefix,stem,filename})=>{
+  if(document.documentElement.dataset.dtvExtensionReady!=="1")return null;
+  const root=document.querySelector('[data-dtv-picker="1"]')||document;
   const items=[...root.querySelectorAll("img[data-dtv-asset-key]")];
   for(const img of items){
    const text=[img.dataset.dtvAssetLabel||"",img.alt||"",img.closest('[role=option],[role=button],button,[tabindex]')?.textContent||"",img.parentElement?.parentElement?.textContent||""].join(" ").toLowerCase();
-   if(text.includes(prefix)){
+   if(text.includes(prefix)||text.includes(stem)||text.includes(filename)){
     return {key:img.dataset.dtvAssetKey,kind:img.dataset.dtvAssetKind||"local",label:img.dataset.dtvAssetLabel||""};
    }
   }
   return null;
- },{prefix});
+ },{prefix,stem,filename});
 }
 async function selectExtensionAsset(page,assetKey){
  if(!assetKey||typeof assetKey!=="string"||assetKey.length>300)return false;
  const selected=await page.evaluate(key=>{
   if(document.documentElement.dataset.dtvExtensionReady!=="1")return false;
-  const root=document.querySelector('[data-dtv-picker="1"]');
-  if(!root)return false;
+  const root=document.querySelector('[data-dtv-picker="1"]')||document;
   const visible=el=>{const r=el.getBoundingClientRect();return r.width>15&&r.height>15;};
   const image=[...root.querySelectorAll('img[data-dtv-asset-key]')].find(el=>visible(el)&&el.dataset.dtvAssetKey===key);
   if(!image)return false;
@@ -44,9 +45,7 @@ async function selectExtensionAsset(page,assetKey){
  if(!selected)return false;
  try{
   const img=page.locator('img[data-dtv-bridge-select="1"]').first();
-  const target=img.locator('xpath=ancestor::*[@role="option" or @role="button" or self::button or @tabindex][1]');
-  if(await target.count())await target.first().click({timeout:8000});
-  else await img.click({timeout:8000});
+  await img.click({timeout:8000,force:true});
   return true;
  }finally{await page.evaluate(()=>document.querySelector('img[data-dtv-bridge-select="1"]')?.removeAttribute("data-dtv-bridge-select")).catch(()=>{});}
 }

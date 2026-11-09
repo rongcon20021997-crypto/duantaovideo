@@ -8,33 +8,51 @@
  const ROOT=document.documentElement;
  const STORAGE_KEY="dtvAssetRegistryV1";
  let observer=null,busy=false,needsScan=false,persistPending=false;
- const visible=el=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>12&&r.height>12&&s.display!=="none"&&s.visibility!=="hidden";};
- const text=el=>((el?.getAttribute?.("aria-label")||"")+" "+(el?.innerText||"")).trim();
- const UPLOAD=/tải nội dung nghe nhìn lên|upload (?:media|image|files?|from computer)/i;
+ const visible=el=>{
+  if(!el||typeof el.getBoundingClientRect!=="function")return false;
+  const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+  return r.width>12&&r.height>12&&s.display!=="none"&&s.visibility!=="hidden";
+ };
+ const text=el=>((el?.getAttribute?.("aria-label")||"")+" "+(el?.innerText||el?.textContent||"")).trim();
+ const UPLOAD=/tải nội dung nghe nhìn lên|upload (?:media|image|files?|from computer)|tải ảnh|tải lên/i;
  function pickerRoot(){
-  const controls=[...document.querySelectorAll("button,[role=button]")].filter(el=>visible(el)&&UPLOAD.test(text(el)));
+  const controls=[...document.querySelectorAll("button,[role=button],label[for]")].filter(el=>visible(el)&&UPLOAD.test(text(el)));
   for(const btn of controls){
+   // 1. Try parent containing a search control
    for(let parent=btn.parentElement;parent&&parent!==document.body;parent=parent.parentElement){
     if(!visible(parent))continue;
-    const search=parent.querySelector('[role=searchbox],input[placeholder*="Tìm kiếm"],input[placeholder*="Search"]');
+    const search=parent.querySelector('[role=searchbox],input[type=search],input[placeholder*="Tìm" i],input[placeholder*="Search" i]');
     if(search&&visible(search))return parent;
    }
+   // 2. Try modal / dialog ancestor
+   const dialog=btn.closest('[role="dialog"],[aria-modal="true"],[data-state="open"]');
+   if(dialog&&visible(dialog))return dialog;
+   // 3. Try ancestor that contains images
+   for(let parent=btn.parentElement;parent&&parent!==document.body;parent=parent.parentElement){
+    if(!visible(parent))continue;
+    if(parent.querySelectorAll("img").length>=1)return parent;
+   }
   }
+  // 4. Any visible dialog with media images
+  const openDialog=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].find(d=>visible(d)&&d.querySelectorAll("img").length>=1);
+  if(openDialog)return openDialog;
   return null;
  }
  function closestMediaTile(image,picker){
   for(let node=image.parentElement;node&&node!==picker;node=node.parentElement){
    const t=(node.innerText||"").trim();
-   if(t.length>0&&t.length<320&&(core.looksLikeFilename(t)||node.getAttribute("aria-selected")!==null||node.hasAttribute("tabindex")))return node;
+   const role=node.getAttribute("role");
+   if(t.length>0&&t.length<320&&(core.looksLikeFilename(t)||node.getAttribute("aria-selected")!==null||node.hasAttribute("tabindex")||role==="option"||role==="button"))return node;
   }
   return image.parentElement||image;
  }
  function filename(tile,img){
   const attrs=[tile.getAttribute("title"),tile.getAttribute("aria-label"),img.getAttribute("alt")].filter(Boolean);
-  const txt=(tile.innerText||"").trim().split(/\r?\n/).map(s=>s.trim()).find(s=>core.looksLikeFilename(s));
-  return core.cleanLabel(txt||attrs.find(s=>core.looksLikeFilename(s))||attrs[0]||"");
+  const lines=(tile.innerText||"").trim().split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const txt=lines.find(s=>core.looksLikeFilename(s));
+  return core.cleanLabel(txt||attrs.find(s=>core.looksLikeFilename(s))||attrs[0]||lines[0]||"");
  }
- function identityFor(tile,img,label){
+ function identityFor(tile,img,label,project){
   const attrs={};
   for(const name of ["data-asset-id","data-media-id","data-item-id","data-resource-id","data-file-id"]){
    let node=img;
@@ -44,7 +62,7 @@
     if(value){attrs[name]=value;break;}
    }
   }
-  return core.identity({project:PROJECT,attrs,src:img.currentSrc||img.src||"",label});
+  return core.identity({project,attrs,src:img.currentSrc||img.src||"",label});
  }
  async function persist(entries){
   if(!entries.length||!chrome?.storage?.local)return;
@@ -68,9 +86,12 @@
    picker.setAttribute("data-dtv-picker","1");
    const entries=[];
    for(const img of [...picker.querySelectorAll("img")].slice(0,150)){
-    if(!visible(img)||img.naturalWidth<48||img.naturalHeight<48)continue;
+    const r=img.getBoundingClientRect();
+    const isLoaded=(img.naturalWidth>=24&&img.naturalHeight>=24)||(r.width>=24&&r.height>=24);
+    if(!visible(img)||!isLoaded)continue;
+    if(/(?:avatar|logo|favicon)/i.test(img.src||""))continue;
     const tile=closestMediaTile(img,picker),label=filename(tile,img);
-    const id=identityFor(tile,img,label);
+    const id=identityFor(tile,img,label,PROJECT);
     if(!id)continue;
     // The key is an explicit DOM asset identifier if available; otherwise
     // a local fingerprint of stable visible metadata (not a Google ID).
@@ -85,6 +106,8 @@
     await persist(entries);
     persistPending=false;
    }
+  }catch(err){
+   console.warn("DTV scan error:",err);
   }finally{
    busy=false;
    if(needsScan){needsScan=false;queueMicrotask(scan);}

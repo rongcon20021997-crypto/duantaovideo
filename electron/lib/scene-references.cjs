@@ -1,17 +1,45 @@
 "use strict";
 // Resolve a storyboard frame's reference image consistently in manual and batch runs.
-// A generated character portrait takes precedence over the raw source photo.
+// A generated character portrait takes precedence only if chosen by user mode;
+// when referenceSource is "original", attached referenceImages take precedence.
 const fs=require("node:fs");
 const path=require("node:path");
 function resolveSceneReferences(ws,{exists=fs.existsSync}={}){
  if(ws?.useSceneReferences===false)return {files:[],source:"disabled"};
  const character=ws?.character||{};
+ const mode=ws?.referenceSource||character?.referenceSource;
+ const originals=Array.isArray(character.referenceImages)?character.referenceImages:[];
+ const selected=[...new Set(originals.filter(x=>typeof x==="string"&&x.trim()).map(p=>path.resolve(p)))].slice(0,2);
  const portrait=String(character.thumbnail||"").trim();
+
+ if(mode==="original"){
+  if(selected.length){
+   const missing=selected.filter(p=>!exists(p));
+   if(missing.length)throw Error("Ảnh mẫu gốc không còn trên máy: "+missing.map(p=>path.basename(p)).join(", ")+". Hãy chọn lại ảnh trong mục Nhân vật.");
+   return {files:selected,source:"original-references"};
+  }
+  if(portrait&&exists(portrait)){
+   return {files:[path.resolve(portrait)],source:"generated-character"};
+  }
+  throw Error("Chưa có ảnh tham chiếu để tạo ảnh phân cảnh. Hãy thêm ảnh tham chiếu bạn đã tải lên.");
+ }
+
+ if(mode==="generated"){
+  if(portrait&&exists(portrait)){
+   return {files:[path.resolve(portrait)],source:"generated-character"};
+  }
+  if(selected.length){
+   const missing=selected.filter(p=>!exists(p));
+   if(missing.length)throw Error("Ảnh mẫu gốc không còn trên máy: "+missing.map(p=>path.basename(p)).join(", ")+". Hãy chọn lại ảnh trong mục Nhân vật.");
+   return {files:selected,source:"original-references"};
+  }
+  if(portrait&&!exists(portrait))throw Error("Ảnh nhân vật đã tạo không còn trên máy: "+portrait+". Hãy tạo lại/chọn ảnh mẫu trong mục Nhân vật.");
+  throw Error("Chưa có ảnh nhân vật đã tạo trên Flow. Hãy tạo hình nhân vật hoặc chuyển sang dùng Ảnh tham chiếu tải lên.");
+ }
+
  if(portrait&&exists(portrait)){
   return {files:[path.resolve(portrait)],source:"generated-character"};
  }
- const originals=Array.isArray(character.referenceImages)?character.referenceImages:[];
- const selected=[...new Set(originals.filter(x=>typeof x==="string"&&x.trim()).map(p=>path.resolve(p)))].slice(0,2);
  if(selected.length){
   const missing=selected.filter(p=>!exists(p));
   if(missing.length)throw Error("Ảnh mẫu gốc không còn trên máy: "+missing.map(p=>path.basename(p)).join(", ")+". Hãy chọn lại ảnh trong mục Nhân vật.");

@@ -108,10 +108,10 @@ function patchFlowModeGuard(source){
  // Never send a video prompt while the visible settings pill still says Nano Banana.
  const guard=String.raw`
         const selectedFlowModel = await this.page.locator("button:visible").filter({hasText:/crop_(?:16_9|9_16|square|portrait|landscape)/}).first().innerText().catch(() => "");
-        if (input.job.type === "video" && /nano\s*banana|imagen/i.test(selectedFlowModel) && !/veo/i.test(selectedFlowModel)) {
+        if (input.job.type === "video" && /nano\s*banana|imagen/i.test(selectedFlowModel) && !/veo|omni/i.test(selectedFlowModel)) {
           throw new Error("GFlow VIDEO MODE NOT SELECTED: the current Google Flow model is " + selectedFlowModel.replace(/\s+/g," ").trim() + ". Select Video/Veo in the settings pill before running video, then retry.");
         }
-        if (input.job.type === "image" && /veo/i.test(selectedFlowModel) && !/banana|imagen/i.test(selectedFlowModel)) {
+        if (input.job.type === "image" && /veo|omni/i.test(selectedFlowModel) && !/banana|imagen/i.test(selectedFlowModel)) {
           throw new Error("GFlow IMAGE MODE NOT SELECTED: the current Google Flow model is " + selectedFlowModel.replace(/\s+/g," ").trim() + ". Select Image/Nano Banana first.");
         }`;
  if(source.includes("GFlow VIDEO MODE NOT SELECTED"))return source;
@@ -130,6 +130,94 @@ function patchFlowSubmitDiagnostics(source){
  return source.replace(anchor,guard);
 }
 
+
+function patchFlowFramesAndResults(source) {
+  // 1. Switch to Frames mode supporting Vietnamese Flow "Khung hình"
+  const oldPick = "wantsFrames ? /Frames$/ : /Ingredients$/";
+  const newPick = "wantsFrames ? /Frames$|Khung hình$/i : /Ingredients$|Thành phần$/i";
+  if (source.includes(oldPick)) source = source.replace(oldPick, newPick);
+
+  // 2. Result detection supporting flow.google.com/asb/ and flow-content.google
+  const oldResultStart = "async resultSrcs(type) {";
+  const nextMethod = "async ensureProject() {";
+  if (source.includes(oldResultStart) && source.includes(nextMethod)) {
+    const start = source.indexOf(oldResultStart);
+    const end = source.indexOf(nextMethod, start);
+    const replacement = `async resultSrcs(type) {
+        if (type === "video") {
+            return this.page.\$\$eval("video", (vids) => vids
+                .map((v) => v.currentSrc || v.src)
+                .filter((src) => Boolean(src) && (src.includes("/asb/") || src.includes("flow-content.google") || /media\\.getMediaUrlRedirect/.test(src))));
+        }
+        return this.page.\$\$eval("img", (imgs) => imgs
+            .map((img) => img.currentSrc || img.src)
+            .filter((src) => Boolean(src) && !/mediaUrlType=/.test(src) && (src.includes("/asb/") || src.includes("flow-content.google") || /media\\.getMediaUrlRedirect/.test(src) || src.startsWith("data:"))));
+    }
+    `;
+    source = source.slice(0, start) + replacement + source.slice(end);
+  }
+
+  // 3. Upload frame supporting Vietnamese slots ("Bắt đầu" / "Kết thúc"), clearing previous frame slot,
+  // uploading media with "Tải nội dung nghe nhìn lên", and confirming with "Thêm vào câu lệnh".
+  const oldUploadStart = "async uploadFrame(slot, filePath) {";
+  const charMethod = "async referenceCharacter(name) {";
+  if (source.includes(oldUploadStart) && source.includes(charMethod)) {
+    const start = source.indexOf(oldUploadStart);
+    const end = source.indexOf(charMethod, start);
+    const replacement = `async uploadFrame(slot, filePath) {
+        if (slot === "Start") {
+            const cancelBtn = this.page.locator('button').filter({ hasText: /^cancel$/i }).first();
+            if (await cancelBtn.count()) {
+                await cancelBtn.click({ timeout: 2500 }).catch(() => undefined);
+                await this.page.waitForTimeout(400);
+            }
+        }
+        const slotEl = this.page.getByRole("button", { name: slot === "Start" ? /^(?:Start|Bắt đầu)$/i : /^(?:End|Kết thúc)$/i })
+            .or(this.page.locator("button").filter({ hasText: slot === "Start" ? /^(?:Start|Bắt đầu)$/i : /^(?:End|Kết thúc)$/i }))
+            .or(this.page.getByText(slot, { exact: true }))
+            .first();
+        if ((await slotEl.count()) === 0)
+            return;
+        await slotEl.click().catch(() => undefined);
+        await this.page.waitForTimeout(600);
+        const dialog = this.page.locator(".cdk-overlay-container, [role=dialog], [aria-modal=true]").first();
+        await dialog.waitFor({ state: "visible", timeout: 10000 }).catch(() => undefined);
+        const uploadButton = dialog.locator("button").filter({ hasText: /upload media|tải nội dung/i }).first();
+        if (!(await uploadButton.count())) return;
+        const [chooser] = await Promise.all([
+            this.page.waitForEvent("filechooser", { timeout: 15000 }),
+            uploadButton.click()
+        ]);
+        await chooser.setFiles(filePath);
+        const rights = this.page.getByText(/quyền sử dụng|bạn có quyền|rights to use/i).first();
+        if (await rights.isVisible().catch(() => false)) {
+            const agree = this.page.getByRole("button", { name: /tôi đồng ý|đồng ý|i agree|agree/i }).first();
+            if (await agree.isVisible().catch(() => false)) await agree.click().catch(() => undefined);
+        }
+        const confirm = dialog.locator("button").filter({ hasText: /add to (?:prompt|scene|character)|thêm vào câu lệnh/i }).first();
+        for (let i = 0; i < 30; i++) {
+            if (await confirm.isEnabled().catch(() => false)) {
+                await confirm.click().catch(() => undefined);
+                break;
+            }
+            await this.page.waitForTimeout(500);
+        }
+        await this.page.keyboard.press("Escape").catch(() => undefined);
+    }
+    `;
+    source = source.slice(0, start) + replacement + source.slice(end);
+  }
+
+  return source;
+}
+
+function patchDownloadButton(source) {
+  const oldDl = 'return page.locator("button").filter({ hasText: /download/i }).first();';
+  const newDl = 'return page.locator("button").filter({ hasText: /download|tải xuống/i }).or(page.locator(\'button[aria-label*="tải xuống" i], button[aria-label*="download" i]\')).first();';
+  if (source.includes(oldDl)) return source.replace(oldDl, newDl);
+  return source;
+}
+
 function patchGFlow(root=path.resolve(__dirname,"..")){
  const dir=path.join(root,"node_modules","@swissmarley","gflow-cli","dist","src","flow");
  let changed=0;
@@ -139,7 +227,7 @@ function patchGFlow(root=path.resolve(__dirname,"..")){
    const before=fs.readFileSync(file,"utf8");
    let after=before.split(oldUrl).join(newUrl);
    if(basename==="ui.js") after=replaceNavigation(after);
-   if(basename==="page.js") after=patchFlowSubmitDiagnostics(patchFlowJobDiagnostics(patchFlowModeGuard(patchFlowOpen(after))));
+   if(basename==="page.js") after=patchFlowFramesAndResults(patchFlowSubmitDiagnostics(patchFlowJobDiagnostics(patchFlowModeGuard(patchFlowOpen(after)))));
    if(!after.includes(newUrl))throw new Error("Expected Flow URL not found in "+basename);
    if(after!==before){fs.writeFileSync(file,after,"utf8");changed++;}
  }
@@ -169,4 +257,4 @@ if(require.main===module){
  try{const info=patchGFlow();console.log("GFlow project compatibility: "+info.origin+" ("+info.changed+" modules updated)");}
  catch(error){console.error("GFlow compatibility patch failed: "+error.message);process.exitCode=1;}
 }
-module.exports={patchFlowModeGuard,patchFlowSubmitDiagnostics,patchGFlow,patchFlowLocators,patchFlowJobDiagnostics,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
+module.exports={patchFlowFramesAndResults,patchDownloadButton,patchFlowModeGuard,patchFlowSubmitDiagnostics,patchGFlow,patchFlowLocators,patchFlowJobDiagnostics,patchCliKeepCurrentTab,patchCharacterKeepCurrentTab,patchBrowserSession,patchFlowOpen,replaceNavigation,navigatorSource,existingSource,oldUrl,newUrl};
