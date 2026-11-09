@@ -50,6 +50,14 @@ function App(){
  const done=ws.scenes.filter(s=>s.status==="completed").length;
  const edges=useMemo<Edge[]>(()=>ws.scenes.slice(1).map((s,i)=>({id:"e"+ws.scenes[i].id+"-"+s.id,source:ws.scenes[i].id,target:s.id,animated:ws.scenes[i].status==="generating",type:"smoothstep",style:{stroke:"#4b6b91",strokeWidth:2},markerEnd:{type:MarkerType.ArrowClosed,color:"#4b6b91"}})),[ws.scenes]);
  useEffect(()=>{Promise.all([window.studio.invoke<Workspace>("workspace:get"),window.studio.invoke<UserSettings>("settings:get")]).then(([w,s])=>{setWs(w);setSettings(s);setSelected(w.scenes[0]?.id||"");setReady(true);}).catch(e=>{setReady(true);setError(String(e));});},[]);
+ useEffect(()=>{
+  if(!ready||tab!=="settings")return;
+  let active=true;
+  window.studio.invoke<ChromeSessionList>("flow:chrome:list",{profile:ws.profile,chromePath:ws.chromePath})
+    .then(result=>{if(active){setChromeSessions(result.sessions);setOtherChromeProcesses(result.externalChromeProcessCount);}})
+    .catch(()=>{});
+  return ()=>{active=false;};
+ },[ready,tab]);
  useEffect(()=>{if(!ready)return;const file=ws.character.thumbnail;if(!file){setCharacterPreview("");return;}let alive=true;window.studio.invoke<string>("media:character-preview",{file}).then(img=>{if(alive)setCharacterPreview(img);}).catch(()=>{if(alive)setCharacterPreview("");});return()=>{alive=false;};},[ready,ws.character.thumbnail]);
  useEffect(()=>{const off=window.studio.subscribe((e:StudioEvent)=>{
   if(e.kind==="log"&&e.message)setLogs(x=>[...x.slice(-150),new Date().toLocaleTimeString("vi-VN")+"  "+e.message!]);
